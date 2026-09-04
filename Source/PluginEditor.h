@@ -16,9 +16,10 @@ public:
     void resized() override;
 
     static constexpr int designWidth   = 1100;
-    static constexpr int designHeight  = 734;
+    // +53 design px matches taller VOICE/HARMONY panel (70 → 123) without compressing the rail.
+    static constexpr int designHeight  = 787;
     static constexpr int defaultWidth  = 900;
-    static constexpr int defaultHeight = 601; // same aspect as design canvas
+    static constexpr int defaultHeight = 644; // same aspect as design canvas
 
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;

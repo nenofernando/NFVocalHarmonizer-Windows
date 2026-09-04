@@ -52,15 +52,39 @@ HarmonyNoteEditor::~HarmonyNoteEditor()
 
 void HarmonyNoteEditor::resized()
 {
-    auto top = getLocalBounds().removeFromTop(22).reduced(6, 2);
-    snapBox.setBounds(top.removeFromRight(110));
-    snapLabel.setBounds(top.removeFromRight(48));
+    layout = computeLayout(getLocalBounds().toFloat());
+    // SNAP reserved in the top toolbar only — identical margins to top/right edges.
+    auto bar = layout.toolbar.toNearestInt();
+    snapBox.setBounds(bar.removeFromRight(110).reduced(0, 1));
+    snapLabel.setBounds(bar.removeFromRight(48).reduced(0, 1));
     timelineView.clampView();
+}
+
+PitchEditorLayout HarmonyNoteEditor::computeLayout(juce::Rectangle<float> bounds) const
+{
+    PitchEditorLayout L;
+    auto inner = bounds.reduced(outerPadding);
+    L.toolbar = inner.removeFromTop(topToolbarHeight);
+
+    // Two symmetric lanes: header + notes each, with a 1px divider between.
+    const float remaining = juce::jmax(1.0f, inner.getHeight());
+    const float fixed = laneHeaderHeight * 2.0f + dividerHeight;
+    float contentH = (remaining - fixed) * 0.5f;
+    // Prefer ~28px when space allows; never collapse below a usable note row.
+    contentH = juce::jmax(18.0f, contentH);
+
+    L.voiceHeader = inner.removeFromTop(laneHeaderHeight);
+    L.voiceNotes = inner.removeFromTop(contentH);
+    L.divider = inner.removeFromTop(dividerHeight);
+    L.harmonyHeader = inner.removeFromTop(laneHeaderHeight);
+    L.harmonyNotes = inner.removeFromTop(contentH);
+    // Any leftover (rounding) stays unused below — keeps lanes equal.
+    return L;
 }
 
 juce::Rectangle<float> HarmonyNoteEditor::getTimelineLaneBounds() const
 {
-    return getLocalBounds().toFloat().withTrimmedTop(22.0f).reduced(8.0f, 4.0f);
+    return layout.notesUnion();
 }
 
 std::pair<int, nf::dsp::ScaleType> HarmonyNoteEditor::keyScale() const
@@ -81,31 +105,39 @@ std::pair<int, nf::dsp::ScaleType> HarmonyNoteEditor::keyScale() const
 
 float HarmonyNoteEditor::midiToY(float midi, bool harmonyLane) const
 {
-    auto r = getTimelineLaneBounds();
-    const float laneTop = harmonyLane ? r.getCentreY() + 4.0f : r.getY();
-    const float laneH = r.getHeight() * 0.42f;
+    // Notes map exclusively into voiceNotes / harmonyNotes — never into headers.
+    auto r = harmonyLane ? layout.harmonyNotes : layout.voiceNotes;
+    // ≥5 px clearance under the lane header text (header is a separate rect).
+    r = r.withTrimmedTop(5.0f).withTrimmedBottom(2.0f);
     const float frac = juce::jlimit(0.0f, 1.0f, (84.0f - midi) / 36.0f);
-    return laneTop + frac * laneH;
+    return r.getY() + frac * juce::jmax(1.0f, r.getHeight());
 }
 
 float HarmonyNoteEditor::yToMidi(float y, bool harmonyLane) const
 {
-    auto r = getTimelineLaneBounds();
-    const float laneTop = harmonyLane ? r.getCentreY() + 4.0f : r.getY();
-    const float laneH = r.getHeight() * 0.42f;
-    const float frac = juce::jlimit(0.0f, 1.0f, (y - laneTop) / juce::jmax(1.0f, laneH));
+    auto r = harmonyLane ? layout.harmonyNotes : layout.voiceNotes;
+    r = r.withTrimmedTop(5.0f).withTrimmedBottom(2.0f);
+    const float frac = juce::jlimit(0.0f, 1.0f, (y - r.getY()) / juce::jmax(1.0f, r.getHeight()));
     return 84.0f - frac * 36.0f;
 }
 
 juce::Rectangle<float> HarmonyNoteEditor::noteBounds(const nf::notes::HarmonyNote& note, bool harmonyLane) const
 {
-    auto r = getTimelineLaneBounds();
+    // Horizontal span uses the active notes lane width (same X for both lanes).
+    const auto lane = harmonyLane ? layout.harmonyNotes : layout.voiceNotes;
     const auto dur = juce::jmax(1.0e-9, timelineView.viewDurationSec);
-    const float x0 = r.getX() + static_cast<float>((note.startSec - timelineView.viewStartSec) / dur) * r.getWidth();
-    const float x1 = r.getX() + static_cast<float>((note.startSec + note.durationSec - timelineView.viewStartSec) / dur) * r.getWidth();
+    const float x0 = lane.getX() + static_cast<float>((note.startSec - timelineView.viewStartSec) / dur) * lane.getWidth();
+    const float x1 = lane.getX() + static_cast<float>((note.startSec + note.durationSec - timelineView.viewStartSec) / dur) * lane.getWidth();
     const float midi = harmonyLane ? note.editedHarmonyMidi() : note.voiceMidi;
     const float y = midiToY(midi, harmonyLane);
-    return juce::Rectangle<float>(x0, y - 7.0f, juce::jmax(4.0f, x1 - x0), 14.0f);
+    const float noteH = 12.0f;
+    auto bounds = juce::Rectangle<float>(x0, y - noteH * 0.5f, juce::jmax(4.0f, x1 - x0), noteH);
+    // Clamp vertically so blocks never enter the header strip.
+    bounds = bounds.getIntersection(lane);
+    if (bounds.isEmpty())
+        bounds = juce::Rectangle<float>(x0, lane.getCentreY() - noteH * 0.5f, juce::jmax(4.0f, x1 - x0), noteH)
+                     .getIntersection(lane);
+    return bounds;
 }
 
 int HarmonyNoteEditor::hitTestNote(juce::Point<float> pos) const
@@ -153,8 +185,7 @@ void HarmonyNoteEditor::toggleSelection(const juce::String& id)
 void HarmonyNoteEditor::selectAllVisibleNotes()
 {
     selectedIds.clear();
-    const auto lane = getTimelineLaneBounds();
-    const auto view = juce::Rectangle<float>(lane.getX(), lane.getY(), lane.getWidth(), lane.getHeight());
+    const auto view = layout.notesUnion();
     for (const auto& n : processor.noteModel.getNotes())
     {
         if (noteBounds(n, true).intersects(view) || noteBounds(n, false).intersects(view))
@@ -254,7 +285,7 @@ void HarmonyNoteEditor::panTimelineFromWheel(float deltaY)
 
 void HarmonyNoteEditor::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
 {
-    if (! getTimelineLaneBounds().contains(event.position))
+    if (! layout.notesUnion().contains(event.position))
     {
         juce::Component::mouseWheelMove(event, wheel);
         return;
@@ -270,28 +301,36 @@ void HarmonyNoteEditor::mouseWheelMove(const juce::MouseEvent& event, const juce
 
 void HarmonyNoteEditor::paint(juce::Graphics& g)
 {
+    layout = computeLayout(getLocalBounds().toFloat());
+
     auto bounds = getLocalBounds().toFloat();
     g.setColour(juce::Colour(0xff080c11));
     g.fillRoundedRectangle(bounds, 6.0f);
     g.setColour(juce::Colour(0xff2a333e));
     g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.0f);
 
-    auto r = getTimelineLaneBounds();
-    g.setColour(juce::Colour(0xff1d2630));
-    g.drawHorizontalLine(juce::roundToInt(r.getCentreY()), r.getX(), r.getRight());
-
-    g.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+    // Fixed lane headers — never share vertical space with note blocks.
+    g.setFont(juce::Font(juce::FontOptions(13.5f, juce::Font::bold)));
     g.setColour(juce::Colour(0xff29e1f2));
-    g.drawFittedText("VOICE", juce::roundToInt(r.getX() + 4.0f), juce::roundToInt(r.getY() + 2.0f), 70, 14, juce::Justification::centredLeft, 1);
+    g.drawFittedText("VOICE",
+                     layout.voiceHeader.toNearestInt().withTrimmedLeft(2),
+                     juce::Justification::centredLeft, 1);
     g.setColour(juce::Colour(0xffa34bf2));
-    g.drawFittedText("HARMONY", juce::roundToInt(r.getX() + 4.0f), juce::roundToInt(r.getCentreY() + 6.0f), 90, 14, juce::Justification::centredLeft, 1);
+    g.drawFittedText("HARMONY",
+                     layout.harmonyHeader.toNearestInt().withTrimmedLeft(2),
+                     juce::Justification::centredLeft, 1);
 
+    // Discrete horizontal divider between VOICE and HARMONY.
+    g.setColour(juce::Colour(0xff1d2630));
+    g.fillRect(layout.divider);
+
+    const auto notesArea = layout.notesUnion();
     if (processor.noteModel.getNotes().empty())
     {
         g.setColour(juce::Colour(0xff8b949e));
         g.setFont(juce::Font(juce::FontOptions(12.0f)));
-        g.drawFittedText("Press ANALYZE, play the DAW, then stop — purple HARMONY blocks become editable",
-                         r.reduced(90, 8).toNearestInt(), juce::Justification::centred, 2);
+        g.drawFittedText("Press ANALYZE, play the DAW, then stop - purple HARMONY blocks become editable",
+                         notesArea.reduced(24.0f, 4.0f).toNearestInt(), juce::Justification::centred, 2);
     }
 
     for (const auto& note : processor.noteModel.getNotes())
@@ -328,20 +367,24 @@ void HarmonyNoteEditor::paint(juce::Graphics& g)
 
     const double play = processor.getHostTimeSeconds();
     const auto dur = juce::jmax(1.0e-9, timelineView.viewDurationSec);
-    const float px = r.getX() + static_cast<float>((play - timelineView.viewStartSec) / dur) * r.getWidth();
-    if (px >= r.getX() && px <= r.getRight())
+    const float px = notesArea.getX()
+                     + static_cast<float>((play - timelineView.viewStartSec) / dur) * notesArea.getWidth();
+    if (px >= notesArea.getX() && px <= notesArea.getRight())
     {
         g.setColour(juce::Colour(0xffedf1f4).withAlpha(0.8f));
-        g.drawLine(px, r.getY(), px, r.getBottom(), 1.2f);
+        g.drawLine(px, notesArea.getY(), px, notesArea.getBottom(), 1.2f);
     }
 
     if (dragMode == DragMode::pitchEdit && tooltipText.isNotEmpty())
     {
         g.setColour(juce::Colour(0xee11161f));
-        g.fillRoundedRectangle(bounds.getCentreX() - 50.0f, 24.0f, 100.0f, 18.0f, 4.0f);
+        g.fillRoundedRectangle(bounds.getCentreX() - 50.0f, layout.toolbar.getBottom() + 2.0f, 100.0f, 18.0f, 4.0f);
         g.setColour(juce::Colours::white);
         g.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
-        g.drawFittedText(tooltipText, juce::roundToInt(bounds.getCentreX() - 50.0f), 24, 100, 18, juce::Justification::centred, 1);
+        g.drawFittedText(tooltipText,
+                         juce::roundToInt(bounds.getCentreX() - 50.0f),
+                         juce::roundToInt(layout.toolbar.getBottom() + 2.0f),
+                         100, 18, juce::Justification::centred, 1);
     }
 
     if (juce::Time::getMillisecondCounter() < zoomHudUntilMs)
@@ -383,7 +426,20 @@ void HarmonyNoteEditor::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
 
-    if (! getTimelineLaneBounds().contains(e.position) && e.position.y > 22.0f)
+    // Clicks on toolbar / headers clear selection but do not start marquee or pitch edit.
+    if (layout.toolbar.contains(e.position)
+        || layout.voiceHeader.contains(e.position)
+        || layout.harmonyHeader.contains(e.position)
+        || layout.divider.contains(e.position))
+    {
+        if (! e.mods.isShiftDown())
+            clearSelection();
+        dragMode = DragMode::none;
+        repaint();
+        return;
+    }
+
+    if (! layout.notesUnion().contains(e.position))
     {
         clearSelection();
         repaint();
@@ -421,7 +477,7 @@ void HarmonyNoteEditor::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    // Empty area: clear or prepare additive marquee.
+    // Empty notes area: clear or prepare additive marquee.
     if (! shift)
         clearSelection();
     dragMode = DragMode::marquee;

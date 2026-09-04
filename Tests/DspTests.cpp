@@ -737,6 +737,38 @@ void analyzeButtonStateMachineTest()
     check(published.load(std::memory_order_relaxed) == AnalysisState::analyzing,
           "AnalysisState publishes atomically without UI calls");
 }
+
+void pitchEditorLayoutStructureTest()
+{
+    // Mirror HarmonyNoteEditor::computeLayout proportions (visual-only contract).
+    constexpr float topToolbarHeight = 20.0f;
+    constexpr float laneHeaderHeight = 18.0f;
+    constexpr float dividerHeight = 1.0f;
+    constexpr float outerPadding = 5.0f;
+    constexpr float panelH = 123.0f;
+    constexpr float panelW = 800.0f;
+
+    auto bounds = juce::Rectangle<float>(0.0f, 0.0f, panelW, panelH);
+    auto inner = bounds.reduced(outerPadding);
+    const auto toolbar = inner.removeFromTop(topToolbarHeight);
+    const float remaining = inner.getHeight();
+    const float contentH = (remaining - laneHeaderHeight * 2.0f - dividerHeight) * 0.5f;
+    const auto voiceHeader = inner.removeFromTop(laneHeaderHeight);
+    const auto voiceNotes = inner.removeFromTop(contentH);
+    const auto divider = inner.removeFromTop(dividerHeight);
+    const auto harmonyHeader = inner.removeFromTop(laneHeaderHeight);
+    const auto harmonyNotes = inner.removeFromTop(contentH);
+
+    check(toolbar.getY() < voiceHeader.getY(), "SNAP toolbar sits above VOICE header");
+    check(voiceHeader.getBottom() <= voiceNotes.getY() + 1.0e-3f, "VOICE header is above VOICE notes");
+    check(voiceNotes.getBottom() <= divider.getY() + 1.0e-3f, "VOICE notes end before divider");
+    check(divider.getBottom() <= harmonyHeader.getY() + 1.0e-3f, "Divider sits above HARMONY header");
+    check(harmonyHeader.getBottom() <= harmonyNotes.getY() + 1.0e-3f, "HARMONY header is above HARMONY notes");
+    check(std::abs(voiceNotes.getHeight() - harmonyNotes.getHeight()) < 1.0e-3f, "VOICE and HARMONY note lanes are equal height");
+    check(! voiceHeader.intersects(voiceNotes), "VOICE label strip does not overlap note area");
+    check(! harmonyHeader.intersects(harmonyNotes), "HARMONY label strip does not overlap note area");
+    check(voiceNotes.getHeight() + 1.0e-3f >= 28.0f - 0.5f, "Note lane height near suggested 28 px at preferred panel size");
+}
 }
 
 int main()
@@ -762,6 +794,7 @@ int main()
     timelineNavigationTest();
     noteSelectionDeleteUndoTest();
     analyzeButtonStateMachineTest();
+    pitchEditorLayoutStructureTest();
     std::cout << "Failures: " << failures << '\n';
     return failures == 0 ? 0 : 1;
 }

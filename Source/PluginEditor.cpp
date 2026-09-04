@@ -53,7 +53,7 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     setLookAndFeel(&look);
 
     constrainer.setFixedAspectRatio(static_cast<double>(designWidth) / static_cast<double>(designHeight));
-    constrainer.setSizeLimits(780, 521, 1536, 1024);
+    constrainer.setSizeLimits(780, 555, 1536, 1093);
     setConstrainer(&constrainer);
     setResizable(true, true);
     setSize(defaultWidth, defaultHeight);
@@ -175,21 +175,35 @@ void NFVocalHarmonizerAudioProcessorEditor::layoutFixedCanvas()
     // Layout is locked to the design canvas. Resize only scales this composition.
     canvas.setBounds(0, 0, designWidth, designHeight);
 
-    // Header bar (matches painted black strip). Keep a clear centre lane for the title.
+    // Header bar — compact right cluster, vertically aligned with the title line.
     auto headerBar = juce::Rectangle<int>(6, 10, designWidth - 12, 56);
-    auto right = headerBar.removeFromRight(292);
-    powerButton.setBounds(right.removeFromRight(40).reduced(2, 8));
-    right.removeFromRight(4);
-    saveButton.setBounds(right.removeFromRight(40).reduced(1, 12));
-    copyButton.setBounds(right.removeFromRight(40).reduced(1, 12));
-    bButton.setBounds(right.removeFromRight(24).reduced(1, 12));
-    aButton.setBounds(right.removeFromRight(24).reduced(1, 12));
-    nextButton.setBounds(right.removeFromRight(20).reduced(1, 12));
-    presetBox.setBounds(right.removeFromRight(88).reduced(0, 12));
-    prevButton.setBounds(right.removeFromRight(20).reduced(1, 12));
+    // Narrower strip keeps clear air after "Harmonizer".
+    auto right = headerBar.removeFromRight(252);
+
+    constexpr int titleY = 14;
+    constexpr int titleH = 28;
+    constexpr int ctrlH = 24;
+    const int ctrlY = titleY + (titleH - ctrlH) / 2; // centre with "NF Vocal Harmonizer"
+
+    auto placeRight = [&right, ctrlY](int width) -> juce::Rectangle<int>
+    {
+        auto cell = right.removeFromRight(width);
+        return { cell.getX(), ctrlY, cell.getWidth(), ctrlH };
+    };
+
+    powerButton.setBounds(placeRight(32).reduced(2, 1));
+    right.removeFromRight(3);
+    saveButton.setBounds(placeRight(34).reduced(1, 1));
+    copyButton.setBounds(placeRight(34).reduced(1, 1));
+    bButton.setBounds(placeRight(20).reduced(1, 1));
+    aButton.setBounds(placeRight(20).reduced(1, 1));
+    nextButton.setBounds(placeRight(16).reduced(1, 1));
+    presetBox.setBounds(placeRight(76).reduced(0, 1));
+    prevButton.setBounds(placeRight(16).reduced(1, 1));
 
     // Clickable title zone — restores default window size when enlarged.
-    titleHitZone.setBounds((designWidth - 360) / 2, 10, 360, 52);
+    // Keep clear of the right cluster and the NF logo on the left.
+    titleHitZone.setBounds((designWidth - 340) / 2, 10, 340, 52);
     titleHitZone.toFront(false);
 
     auto b = juce::Rectangle<int>(0, 0, designWidth, designHeight).reduced(18);
@@ -207,7 +221,7 @@ void NFVocalHarmonizerAudioProcessorEditor::layoutFixedCanvas()
     keyBox.setBounds(top.removeFromLeft(72).reduced(3, 28));
     scaleBox.setBounds(top.removeFromLeft(135).reduced(3, 28));
     detectedLabel.setBounds(top.reduced(4, 27));
-    noteEditor.setBounds(b.removeFromTop(70)); b.removeFromTop(7);
+    noteEditor.setBounds(b.removeFromTop(HarmonyNoteEditor::preferredPanelHeight)); b.removeFromTop(7);
     harmonizeButton.setBounds(b.removeFromBottom(62).reduced(60, 7));
     rail.setBounds(b.reduced(70, 2));
 
