@@ -1,0 +1,11 @@
+build/
+build-macos/
+build-windows/
+build-aax/
+build-core/
+dist/
+.DS_Store
+*.user
+CMakeUserPresets.json
+compile_commands.json
+.cache/

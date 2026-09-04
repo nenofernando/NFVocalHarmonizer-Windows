@@ -31,5 +31,10 @@ void PitchTrace::paint(juce::Graphics& g)
     };
     build(voice, r.getY() + r.getHeight() * 0.36f, juce::Colour(0xff29e1f2));
     build(harmony, r.getY() + r.getHeight() * 0.72f, juce::Colour(0xffa34bf2));
+    g.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+    g.setColour(juce::Colour(0xff29e1f2));
+    g.drawFittedText("VOICE", juce::roundToInt(r.getX() + 10.0f), juce::roundToInt(r.getY() + 6.0f), 70, 16, juce::Justification::centredLeft, 1);
+    g.setColour(juce::Colour(0xffa34bf2));
+    g.drawFittedText("HARMONY", juce::roundToInt(r.getX() + 10.0f), juce::roundToInt(r.getCentreY() + 4.0f), 90, 16, juce::Justification::centredLeft, 1);
 }
 

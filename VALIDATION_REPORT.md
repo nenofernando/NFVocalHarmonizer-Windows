@@ -1,41 +1,58 @@
-# Relatório de validação do pacote
+# Relatório de validação — NF Vocal Harmonizer (máquina do projeto)
 
-## Executado neste ambiente
+Atualizado: 2026-09-04
 
-- Estrutura do pacote e todas as referências do CMake: PASS.
-- 16 arquivos SVG analisados como XML válido: PASS.
-- Mockup aprovado 1536 x 1024 incluído: PASS.
-- IDs permanentes dos 10 parâmetros: PASS.
-- Balanceamento básico de delimitadores C++: PASS.
-- Compilação isolada do núcleo DSP em C++20 com `-Wall -Wextra -pedantic`: PASS.
-- Testes do núcleo DSP: 0 falhas.
-- ASan + UBSan direcionados ao núcleo: 0 erros.
+## Isolamento
 
-## Resultados do detector
+- Vocal Verb **não alterado** (`update/space-selector`, working tree limpo).
+- Trabalho isolado em `.../ARQUIVOS PLUGINS OFICIAIS/NF Vocal Harmonizer`.
 
-| Entrada | Detectado | Confiança |
-|---:|---:|---:|
-| 90 Hz | 90.0009 Hz | 0.999899 |
-| 150 Hz | 150.008 Hz | 1.000000 |
-| 220 Hz | 220.011 Hz | 0.998716 |
-| 440 Hz | 440.235 Hz | 0.998104 |
-| 700 Hz | 701.122 Hz | 0.998670 |
+## Compilação
 
-## Música
+| Formato | Build dir | Arch | Status |
+|---|---|---|---|
+| Standalone | `build-macos` | x86_64 | PASS |
+| AU | `build-macos` | x86_64 | PASS |
+| VST3 | `build-macos` | x86_64 | PASS |
+| AAX | `build-aax` + SDK `aax-sdk-2-9-0` | x86_64 | PASS |
 
-- C maior: C +3rd = E: PASS.
-- C maior: D +3rd = F: PASS.
-- Oitava acima/abaixo: PASS.
-- Preservação do desvio de vibrato: PASS.
-- Analisador identifica C maior numa sequência ponderada: PASS.
+JUCE: 9.0.1 (`/Users/nenofernando/Downloads/JUCE`)  
+AAX SDK: `/Users/nenofernando/Downloads/aax-sdk-2-9-0` (mesmo do Vocal Verb)  
+Gerador: Unix Makefiles (sem Xcode.app nesta máquina)
 
-## Pitch shifter
+Hashes: `dist/validation/binary-hashes.txt`
 
-- Saída finita, sem NaN/Inf: PASS.
-- Pico limitado no teste: PASS.
-- Latência positiva reportada: PASS.
+AU instalado em `~/Library/Audio/Plug-Ins/Components` e validado com `auvaltool -v aufx NfVh NfAt`: **PASS** (`dist/validation/auval.txt`).
 
-## Validação ainda obrigatória no computador do projeto
+## Testes DSP / estado
 
-O JUCE completo, Xcode, Visual Studio e SDK AAX não estão disponíveis neste ambiente. Portanto, o Claude deve compilar o plugin completo, corrigir eventuais diferenças de API da versão JUCE instalada e executar o checklist de hosts, áudio real, presets e recall antes de gerar instalador.
+`NFVocalHarmonizerTests`: **0 falhas**
 
+Inclui: escala diatônica, YIN, Auto Key, shifter NaN, latência dry, invariância de bloco, silêncio sem nota fantasma, IDs estáveis + `power`, recall APVTS, presets TemporaryFile, automação audível.
+
+`tools/validate_package.py`: **PASS**
+
+## UI
+
+Ver `docs/UI_LOCK.md`. POWER separado de HARMONIZE via ID novo `power` (schema 2). Mockup preservado; sem reposicionar controles.
+
+## Sonoridade (vozes reais)
+
+Ver `docs/SOUND_AUDIT_REPORT.md` e `dist/validation/vocal-offline-audit.txt`.
+
+- Takes masculinos Neno: mediana ~3–4 cents — PASS comercial de pitch.
+- Alto mixed: ~13 cents — PASS fase, abaixo do marketing comercial.
+- Fala paired speech: ~35 cents — FAIL cents (esperado para não-melodia).
+- **Não** declarar sonoridade comercial final; formant ainda é coloração leve.
+
+## AAX
+
+Binário gerado: `build-aax/.../AAX/NF Vocal Harmonizer.aaxplugin`  
+Assinatura PACE/iLok e instalador **não** feitos nesta fase.
+
+## Próximos passos sugeridos
+
+1. Escuta cega +8ve/formantes no Standalone / Reaper / LUNA / Pro Tools.
+2. Decisão de backend (manter granular vs PSOLA/SDK) sem mudar IDs/UI.
+3. Universal binary + assinatura/notarização + instalador de teste.
+4. Validação Avid das ferramentas oficiais no `.aaxplugin`.

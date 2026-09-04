@@ -14,6 +14,7 @@ inline constexpr auto key       = "key";
 inline constexpr auto scale     = "scale";
 inline constexpr auto autoKey   = "autoKey";
 inline constexpr auto enabled   = "enabled";
+inline constexpr auto power     = "power";
 
 inline juce::StringArray intervalNames()
 {
@@ -48,6 +49,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     p.push_back(std::make_unique<APC>(juce::ParameterID { scale, 1 }, "Scale", scaleNames(), 1));
     p.push_back(std::make_unique<APB>(juce::ParameterID { autoKey, 1 }, "Auto Key", true));
     p.push_back(std::make_unique<APB>(juce::ParameterID { enabled, 1 }, "Harmonize", false));
+    p.push_back(std::make_unique<APB>(juce::ParameterID { power, 1 }, "Power", true));
     return { p.begin(), p.end() };
 }
 }

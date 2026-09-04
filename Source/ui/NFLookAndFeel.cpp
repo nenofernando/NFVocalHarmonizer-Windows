@@ -50,6 +50,19 @@ void NFLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, con
 {
     auto r = b.getLocalBounds().toFloat().reduced(1.0f);
     const bool on = b.getToggleState();
+    if (b.getButtonText() == "POWER")
+    {
+        auto fill = on ? juce::Colour(0xff1a3a55) : juce::Colour(0xff11161f);
+        if (hover) fill = fill.brighter(0.12f);
+        if (down) fill = fill.darker(0.18f);
+        const auto radius = juce::jmin(r.getWidth(), r.getHeight()) * 0.5f - 1.0f;
+        const auto centre = r.getCentre();
+        g.setColour(fill);
+        g.fillEllipse(centre.x - radius, centre.y - radius, radius * 2.0f, radius * 2.0f);
+        g.setColour(on ? juce::Colour(0xff5fe8ff) : juce::Colour(0xff485462));
+        g.drawEllipse(centre.x - radius, centre.y - radius, radius * 2.0f, radius * 2.0f, on ? 1.8f : 1.0f);
+        return;
+    }
     auto fill = on ? juce::Colour(0xff247aff) : juce::Colour(0xff11161f);
     if (hover) fill = fill.brighter(0.12f);
     if (down) fill = fill.darker(0.18f);
@@ -61,6 +74,15 @@ void NFLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, con
 
 void NFLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& b, bool, bool)
 {
+    if (b.getButtonText() == "POWER")
+    {
+        auto bounds = b.getLocalBounds().toFloat().reduced(14.0f);
+        const auto colour = b.getToggleState() ? juce::Colour(0xff5fe8ff) : juce::Colour(0xffc6ced8);
+        g.setColour(colour);
+        g.drawEllipse(bounds, 2.0f);
+        g.fillRect(bounds.getCentreX() - 1.2f, bounds.getY() - 3.0f, 2.4f, bounds.getHeight() * 0.55f);
+        return;
+    }
     g.setColour(b.getToggleState() ? juce::Colours::white : juce::Colour(0xffc6ced8));
     g.setFont(juce::Font(juce::FontOptions(13.0f, juce::Font::bold)));
     g.drawFittedText(b.getButtonText(), b.getLocalBounds().reduced(5), juce::Justification::centred, 1);

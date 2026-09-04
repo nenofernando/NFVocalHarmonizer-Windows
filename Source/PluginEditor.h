@@ -27,7 +27,7 @@ private:
     void switchAB(bool useA);
     void showError(const juce::String& message);
 
-    NFVocalHarmonizerAudioProcessor& processor;
+    NFVocalHarmonizerAudioProcessor& audioProcessor;
     NFLookAndFeel look;
     IntervalRail rail;
     PitchTrace trace;

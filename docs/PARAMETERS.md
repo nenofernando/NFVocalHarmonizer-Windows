@@ -12,6 +12,9 @@
 | `scale` | Scale | 5 escalas | Natural Minor | Escala manual/fallback |
 | `autoKey` | Auto Key | Off/On | On | Análise automática |
 | `enabled` | Harmonize | Off/On | Off | Ativa a harmonia |
+| `power` | Power | Off/On | On | Bypass suave do plugin (ID novo, schema 2). Não substitui `enabled`. |
+
+Os dez IDs originais permanecem estáveis. `power` foi adicionado porque o mockup tem POWER circular no cabeçalho e HARMONIZE como ação principal — no pacote inicial os dois botões apontavam para `enabled`.
 
 ## Regras de recall
 

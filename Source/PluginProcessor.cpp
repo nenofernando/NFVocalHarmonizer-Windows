@@ -41,11 +41,16 @@ nf::dsp::HarmonySettings NFVocalHarmonizerAudioProcessor::readSettings() const
     return s;
 }
 
-void NFVocalHarmonizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void NFVocalHarmonizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals guard;
     for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
         buffer.clear(ch, 0, buffer.getNumSamples());
+    if (apvts.getRawParameterValue(nf::params::power)->load() < 0.5f)
+    {
+        processBlockBypassed(buffer, midi);
+        return;
+    }
     engine.process(buffer, readSettings());
 }
 
@@ -60,7 +65,7 @@ juce::AudioProcessorEditor* NFVocalHarmonizerAudioProcessor::createEditor()
 void NFVocalHarmonizerAudioProcessor::getStateInformation(juce::MemoryBlock& dest)
 {
     auto root = apvts.copyState();
-    root.setProperty("schemaVersion", 1, nullptr);
+    root.setProperty("schemaVersion", 2, nullptr);
     root.addChild(slotA.createCopy(), -1, nullptr);
     root.addChild(slotB.createCopy(), -1, nullptr);
     if (auto xml = root.createXml()) copyXmlToBinary(*xml, dest);
