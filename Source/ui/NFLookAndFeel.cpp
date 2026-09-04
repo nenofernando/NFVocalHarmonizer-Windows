@@ -63,6 +63,40 @@ void NFLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, con
         g.drawEllipse(centre.x - radius, centre.y - radius, radius * 2.0f, radius * 2.0f, on ? 1.8f : 1.0f);
         return;
     }
+
+    // ANALYZE visual states (pulse intensity driven by UI timer properties only).
+    if (b.getComponentID() == "analyzeButton")
+    {
+        const int visual = static_cast<int>(b.getProperties().getWithDefault("analysisVisual", 0));
+        const float intensity = static_cast<float>(b.getProperties().getWithDefault("analysisPulse", 0.0));
+        if (visual == 0)
+        {
+            auto fill = juce::Colour(0xff11161f);
+            if (hover) fill = fill.brighter(0.12f);
+            if (down) fill = fill.darker(0.18f);
+            g.setColour(fill);
+            g.fillRoundedRectangle(r, 5.0f);
+            g.setColour(juce::Colour(0xff485462));
+            g.drawRoundedRectangle(r, 5.0f, 1.0f);
+            return;
+        }
+
+        const auto neon = juce::Colour::fromRGB(20, 255, 135);
+        const float glow = juce::jlimit(0.0f, 1.0f, intensity);
+        // Small controlled halo — no heavy circular shadow, stays within the button area.
+        g.setColour(neon.withAlpha(0.10f + 0.14f * glow));
+        g.fillRoundedRectangle(r.expanded(1.5f), 6.0f);
+
+        auto fill = juce::Colour(0xff11161f).interpolatedWith(neon, 0.22f + 0.38f * glow);
+        if (hover) fill = fill.brighter(0.06f);
+        if (down) fill = fill.darker(0.12f);
+        g.setColour(fill);
+        g.fillRoundedRectangle(r, 5.0f);
+        g.setColour(neon.withAlpha(0.55f + 0.40f * glow));
+        g.drawRoundedRectangle(r, 5.0f, 1.4f + 0.4f * glow);
+        return;
+    }
+
     auto fill = on ? juce::Colour(0xff247aff) : juce::Colour(0xff11161f);
     if (hover) fill = fill.brighter(0.12f);
     if (down) fill = fill.darker(0.18f);
@@ -83,6 +117,17 @@ void NFLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& b, bool,
         g.fillRect(bounds.getCentreX() - 1.2f, bounds.getY() - 3.0f, 2.4f, bounds.getHeight() * 0.55f);
         return;
     }
+
+    // ANALYZE label stays white and readable in every analysis visual state.
+    if (b.getComponentID() == "analyzeButton")
+    {
+        const int visual = static_cast<int>(b.getProperties().getWithDefault("analysisVisual", 0));
+        g.setColour(visual != 0 ? juce::Colours::white : juce::Colour(0xffc6ced8));
+        g.setFont(juce::Font(juce::FontOptions(13.0f, juce::Font::bold)));
+        g.drawFittedText("ANALYZE", b.getLocalBounds().reduced(5), juce::Justification::centred, 1);
+        return;
+    }
+
     g.setColour(b.getToggleState() ? juce::Colours::white : juce::Colour(0xffc6ced8));
     g.setFont(juce::Font(juce::FontOptions(13.0f, juce::Font::bold)));
     g.drawFittedText(b.getButtonText(), b.getLocalBounds().reduced(5), juce::Justification::centred, 1);

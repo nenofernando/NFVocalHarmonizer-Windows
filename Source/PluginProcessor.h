@@ -5,6 +5,7 @@
 #include "dsp/HarmonyEngine.h"
 #include "dsp/NoteEditModel.h"
 #include "dsp/NoteCapture.h"
+#include "dsp/AnalysisState.h"
 
 class NFVocalHarmonizerAudioProcessor final : public juce::AudioProcessor,
                                               private juce::Timer
@@ -36,6 +37,10 @@ public:
     void beginAnalyzeCapture();
     void finalizeAnalyzeCapture();
     bool isAnalyzeArmed() const noexcept { return capture.isArmed(); }
+    AnalysisState getAnalysisState() const noexcept
+    {
+        return analysisState.load(std::memory_order_relaxed);
+    }
 
     nf::dsp::PitchEstimate getPitchEstimate() const { return engine.getPitchEstimate(); }
     nf::dsp::ScaleResult getDetectedScale() const { return engine.getDetectedScale(); }
@@ -61,6 +66,7 @@ private:
     juce::ValueTree slotA { "SLOT_A" }, slotB { "SLOT_B" };
     std::atomic<double> hostTimeSec { 0.0 };
     std::atomic<bool> hostPlaying { false };
+    std::atomic<AnalysisState> analysisState { AnalysisState::idle };
     bool wasPlaying = false;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NFVocalHarmonizerAudioProcessor)
 };

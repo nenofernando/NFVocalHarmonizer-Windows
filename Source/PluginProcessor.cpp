@@ -72,6 +72,11 @@ void NFVocalHarmonizerAudioProcessor::beginAnalyzeCapture()
     capture.ring().reset();
     capture.setArmed(true);
     engine.resetKeyAnalysis();
+
+    // Clear any previous completed/failed visual before arming again.
+    const bool playing = hostPlaying.load(std::memory_order_relaxed);
+    analysisState.store(analysisStateForBegin(playing), std::memory_order_relaxed);
+    wasPlaying = playing;
 }
 
 void NFVocalHarmonizerAudioProcessor::finalizeAnalyzeCapture()
@@ -81,18 +86,30 @@ void NFVocalHarmonizerAudioProcessor::finalizeAnalyzeCapture()
     const auto settings = readSettings();
     const auto key = activeKeyScale();
     auto notes = capture.buildNotes(settings.intervalChoice, key.first, key.second);
+    const bool hasNotes = ! notes.empty();
     noteModel.setNotes(std::move(notes));
+    analysisState.store(analysisStateForFinalize(hasNotes), std::memory_order_relaxed);
 }
 
 void NFVocalHarmonizerAudioProcessor::timerCallback()
 {
-    if (! capture.isArmed())
-        return;
-
-    capture.drainRing();
     const bool playing = hostPlaying.load(std::memory_order_relaxed);
-    if (wasPlaying && ! playing)
-        finalizeAnalyzeCapture();
+    const auto state = analysisState.load(std::memory_order_relaxed);
+
+    if (capture.isArmed())
+    {
+        capture.drainRing();
+
+        // Armed + host starts playing → analyzing (spacebar / transport button).
+        const auto next = analysisStateAfterArmedSeesPlay(state, playing);
+        if (next != state)
+            analysisState.store(next, std::memory_order_relaxed);
+
+        // Play → Stop finalizes. Loop/seek while still playing must not finalize.
+        if (analysisShouldFinalizeOnStop(wasPlaying, playing))
+            finalizeAnalyzeCapture();
+    }
+
     wasPlaying = playing;
 }
 
@@ -151,6 +168,10 @@ void NFVocalHarmonizerAudioProcessor::getStateInformation(juce::MemoryBlock& des
     root.addChild(slotB.createCopy(), -1, nullptr);
     // Session-only note edits: stored with the instance, not with user presets.
     root.addChild(noteModel.toValueTree(), -1, nullptr);
+    // Completed visual may persist only together with a saved note map.
+    if (analysisState.load(std::memory_order_relaxed) == AnalysisState::completed
+        && ! noteModel.getNotes().empty())
+        root.setProperty("analysisCompleted", true, nullptr);
     if (auto xml = root.createXml()) copyXmlToBinary(*xml, dest);
 }
 
@@ -170,6 +191,13 @@ void NFVocalHarmonizerAudioProcessor::setStateInformation(const void* data, int 
         noteModel.fromValueTree(edits);
         root.removeChild(edits, nullptr);
     }
+    // Restore completed indicator only when notes are present; never restore live arm/pulse.
+    if (static_cast<bool>(root.getProperty("analysisCompleted", false))
+        && ! noteModel.getNotes().empty())
+        analysisState.store(AnalysisState::completed, std::memory_order_relaxed);
+    else if (noteModel.getNotes().empty())
+        analysisState.store(AnalysisState::idle, std::memory_order_relaxed);
+    root.removeProperty("analysisCompleted", nullptr);
     apvts.replaceState(root);
 }
 

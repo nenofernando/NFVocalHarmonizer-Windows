@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include <cmath>
 
 namespace
 {
@@ -100,6 +101,8 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
 
     harmonizeButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff247aff));
     harmonizeButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    analyzeButton.setComponentID("analyzeButton");
+    analyzeButton.setButtonText("ANALYZE");
     analyzeButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)]
     {
         if (safe == nullptr)
@@ -108,6 +111,7 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
             safe->audioProcessor.finalizeAnalyzeCapture();
         else
             safe->audioProcessor.beginAnalyzeCapture();
+        safe->refreshAnalyzeButtonVisual();
     };
     aButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)] { if (safe != nullptr) safe->switchAB(true); };
     bButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)] { if (safe != nullptr) safe->switchAB(false); };
@@ -147,6 +151,7 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
 
     layoutFixedCanvas();
     refreshPresetList();
+    refreshAnalyzeButtonVisual();
     startTimerHz(30);
 }
 
@@ -259,7 +264,43 @@ void NFVocalHarmonizerAudioProcessorEditor::timerCallback()
                                juce::dontSendNotification);
     keyBox.setEnabled(! autoMode); scaleBox.setEnabled(! autoMode);
     analyzeButton.setEnabled(true);
-    analyzeButton.setButtonText(audioProcessor.isAnalyzeArmed() ? "ARM..." : "ANALYZE");
+    analyzeButton.setButtonText("ANALYZE");
+    refreshAnalyzeButtonVisual();
+}
+
+void NFVocalHarmonizerAudioProcessorEditor::refreshAnalyzeButtonVisual()
+{
+    const auto state = audioProcessor.getAnalysisState();
+    int visual = 0; // idle / failed → original look
+    float intensity = 0.0f;
+
+    switch (state)
+    {
+        case AnalysisState::idle:
+        case AnalysisState::failed:
+            visual = 0;
+            intensity = 0.0f;
+            break;
+        case AnalysisState::armed:
+        case AnalysisState::completed:
+            visual = 1; // fixed neon green
+            intensity = 0.72f;
+            break;
+        case AnalysisState::analyzing:
+        {
+            visual = 2;
+            // ~1.5–2 Hz soft pulse (0.0018 * 2π ≈ 1.8 cycles/sec)
+            const float phase = std::fmod(static_cast<float>(juce::Time::getMillisecondCounterHiRes() * 0.0018),
+                                         juce::MathConstants<float>::twoPi);
+            const float pulse = 0.5f + 0.5f * std::sin(phase);
+            intensity = juce::jmap(pulse, 0.45f, 1.0f);
+            break;
+        }
+    }
+
+    analyzeButton.getProperties().set("analysisVisual", visual);
+    analyzeButton.getProperties().set("analysisPulse", intensity);
+    analyzeButton.repaint();
 }
 
 void NFVocalHarmonizerAudioProcessorEditor::refreshPresetList(const juce::String& select)

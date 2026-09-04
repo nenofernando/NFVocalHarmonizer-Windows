@@ -54,6 +54,7 @@ private:
     void layoutFixedCanvas();
     void resetToDefaultSize();
     void refreshPresetList(const juce::String& select = {});
+    void refreshAnalyzeButtonVisual();
     void savePresetAsync();
     void switchAB(bool useA);
     void showError(const juce::String& message);

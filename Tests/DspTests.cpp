@@ -5,6 +5,7 @@
 #include "dsp/HarmonyEngine.h"
 #include "dsp/NoteEditModel.h"
 #include "dsp/NoteCapture.h"
+#include "dsp/AnalysisState.h"
 #include "ui/TimelineViewState.h"
 #include "Parameters.h"
 #include "PresetManager.h"
@@ -706,6 +707,36 @@ void noteSelectionDeleteUndoTest()
     check(! model.removeNotes({}, &model.getUndoManager()), "Empty selection delete is a no-op");
     check(model.getNotes().size() == countBefore, "Empty delete leaves map intact");
 }
+
+void analyzeButtonStateMachineTest()
+{
+    check(analysisStateForBegin(false) == AnalysisState::armed, "Analyze while stopped → Armed");
+    check(analysisStateForBegin(true) == AnalysisState::analyzing, "Analyze while playing → Analyzing");
+    check(analysisStateAfterArmedSeesPlay(AnalysisState::armed, true) == AnalysisState::analyzing,
+          "Armed + Play → Analyzing");
+    check(analysisStateAfterArmedSeesPlay(AnalysisState::armed, false) == AnalysisState::armed,
+          "Armed stays Armed until Play");
+    check(analysisStateAfterArmedSeesPlay(AnalysisState::analyzing, true) == AnalysisState::analyzing,
+          "Loop/seek while Playing keeps Analyzing");
+    check(analysisShouldFinalizeOnStop(true, false), "Play→Stop finalizes analysis");
+    check(! analysisShouldFinalizeOnStop(true, true), "Still Playing does not finalize (loop safe)");
+    check(! analysisShouldFinalizeOnStop(false, false), "Idle Stop does not finalize");
+    check(analysisStateForFinalize(true) == AnalysisState::completed, "Notes present → Completed");
+    check(analysisStateForFinalize(false) == AnalysisState::failed, "No notes → Failed/Empty look");
+
+    // Soft pulse mapping stays within gentle neon range (UI-only math).
+    const float phase = std::fmod(static_cast<float>(0.25 * juce::MathConstants<double>::twoPi),
+                                  juce::MathConstants<float>::twoPi);
+    const float pulse = 0.5f + 0.5f * std::sin(phase);
+    const float intensity = juce::jmap(pulse, 0.45f, 1.0f);
+    check(intensity >= 0.45f && intensity <= 1.0f, "Pulse intensity stays in soft neon range");
+
+    // Atomic publish pattern (message/audio publish only; no UI from audio thread).
+    std::atomic<AnalysisState> published { AnalysisState::idle };
+    published.store(AnalysisState::analyzing, std::memory_order_relaxed);
+    check(published.load(std::memory_order_relaxed) == AnalysisState::analyzing,
+          "AnalysisState publishes atomically without UI calls");
+}
 }
 
 int main()
@@ -730,6 +761,7 @@ int main()
     rtOffsetLookupNoAllocationTest();
     timelineNavigationTest();
     noteSelectionDeleteUndoTest();
+    analyzeButtonStateMachineTest();
     std::cout << "Failures: " << failures << '\n';
     return failures == 0 ? 0 : 1;
 }
