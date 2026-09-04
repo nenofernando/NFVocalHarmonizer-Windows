@@ -1,0 +1,43 @@
+CLAUDE, RECEBA ESTA PASTA COMO ESPECIFICAÇÃO MESTRE DO PROJETO NF VOCAL HARMONIZER.
+
+OBJETIVO
+Construir e finalizar um plugin profissional de harmonização vocal monofônica em tempo real para macOS e Windows. Formatos finais: VST3, AU e AAX no macOS; VST3 e AAX no Windows. Fabricante: NF Audio Tools - By Neno Fernando.
+
+REGRA VISUAL
+Abra primeiro assets/mockup/NF_Vocal_Harmonizer_Approved.png. A interface deve permanecer igual ao mockup aprovado: prata escovada, vidro preto, ciano para VOICE, violeta para HARMONY, meters laterais, régua central e cinco knobs inferiores. Não adicionar, remover ou reposicionar controles sem perguntar.
+
+REGRA FUNCIONAL PRINCIPAL
+O usuário insere o plugin numa voz, ativa AUTO KEY ou escolhe Key/Scale manualmente, escolhe um único intervalo e pressiona HARMONIZE. A harmonia deve acompanhar nota por nota. Terças/sextas devem ser diatônicas, não deslocamentos cromáticos fixos. Preservar vibrato e transições naturais.
+
+ORDEM DE TRABALHO
+1. Leia README.md, docs/DSP_ARCHITECTURE.md, docs/UI_SPEC.md e docs/QA_CHECKLIST.md.
+2. Faça um checkpoint git inicial antes de alterar qualquer arquivo.
+3. Configure JUCE/CMake e compile primeiro Standalone, VST3 e AU.
+4. Corrija erros de compilação sem remover funções.
+5. Rode NFVocalHarmonizerTests.
+6. Crie testes adicionais para latência, invariância por blocos, recall, presets e automação.
+7. Compare auditivamente o pitch shifter granular com uma solução PSOLA/phase-vocoder de alta qualidade ou SDK comercial legalmente licenciado.
+8. Se substituir o backend, preserve IDs de parâmetros, APVTS, UI e recall.
+9. Não declare o som pronto antes de testes com vozes reais.
+10. Só depois gere builds AAX e instaladores de teste.
+
+PARÂMETROS QUE NÃO PODEM MUDAR DE ID
+interval, harmony, formant, humanize, width, mix, key, scale, autoKey, enabled.
+
+QUALIDADE DE ÁUDIO
+O backend incluído é funcional e serve como base completa, mas o objetivo final é qualidade comercial. Investigue formant preservation real, estabilidade de consoantes, sibilância, transientes, vibrato, glissando e baixa latência. Não mascarar artefatos com filtros ou reverb. Não usar bibliotecas com licença incompatível sem informar.
+
+SEGURANÇA DE PRESETS
+O PresetManager usa TemporaryFile e callbacks com SafePointer. Preserve essa abordagem. Nunca delete/reset o FileChooser ou diálogo diretamente dentro do callback que pertence a ele; agende a destruição na Message Thread. Teste na LUNA e no Pro Tools.
+
+ENTREGA ESPERADA
+- Código compilando sem warnings relevantes.
+- Testes com relatório PASS/FAIL.
+- AU, VST3, Standalone e AAX conforme SDK disponível.
+- Hashes dos binários.
+- Instalador de teste separado do instalador final.
+- Lista exata das alterações.
+- Checkpoint git limpo para rollback.
+
+NÃO ALTERE A IDENTIDADE VISUAL NEM SIMPLIFIQUE O MOTOR SEM AUTORIZAÇÃO.
+
