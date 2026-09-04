@@ -15,19 +15,31 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
 
+    static constexpr int designWidth  = 1100;
+    static constexpr int designHeight = 734;
+
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
+    class FixedCanvas final : public juce::Component
+    {
+    public:
+        void paint(juce::Graphics&) override;
+    };
+
     void timerCallback() override;
     void configureKnob(juce::Slider&, const juce::String&, juce::Colour, int decimals, const juce::String& suffix);
+    void layoutFixedCanvas();
     void refreshPresetList(const juce::String& select = {});
     void savePresetAsync();
     void switchAB(bool useA);
     void showError(const juce::String& message);
 
     NFVocalHarmonizerAudioProcessor& audioProcessor;
+    juce::ComponentBoundsConstrainer constrainer;
+    FixedCanvas canvas;
     NFLookAndFeel look;
     IntervalRail rail;
     PitchTrace trace;
@@ -49,4 +61,3 @@ private:
     bool activeA = true;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NFVocalHarmonizerAudioProcessorEditor)
 };
-

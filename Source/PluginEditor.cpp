@@ -15,19 +15,53 @@ void prepareLabel(juce::Label& label, const juce::String& text)
 }
 }
 
+void NFVocalHarmonizerAudioProcessorEditor::FixedCanvas::paint(juce::Graphics& g)
+{
+    juce::ColourGradient bg(juce::Colour(0xff34383c), 0, 0, juce::Colour(0xff111419), 0,
+                            static_cast<float>(designHeight), false);
+    g.setGradientFill(bg);
+    g.fillAll();
+    g.setColour(juce::Colour(0xffaab0b5));
+    g.drawRoundedRectangle(juce::Rectangle<float>(0.0f, 0.0f,
+                                                  static_cast<float>(designWidth),
+                                                  static_cast<float>(designHeight)).reduced(3.0f),
+                           9.0f, 2.0f);
+    g.setColour(juce::Colour(0xff0a0d11));
+    g.fillRect(6, 6, designWidth - 12, 64);
+    g.setColour(juce::Colour(0xffeceff2));
+    g.setFont(juce::Font(juce::FontOptions(28.0f, juce::Font::bold)));
+    g.drawFittedText("NF Vocal Harmonizer", 250, 13, designWidth - 500, 33, juce::Justification::centred, 1);
+    g.setColour(juce::Colour(0xffb7bec7));
+    g.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
+    g.drawFittedText("INTELLIGENT VOCAL HARMONY", 250, 44, designWidth - 500, 15, juce::Justification::centred, 1);
+    g.setColour(juce::Colour(cyan));
+    g.setFont(juce::Font(juce::FontOptions(15.0f, juce::Font::bold)));
+    g.drawText("NF", 26, 16, 42, 25, juce::Justification::centredLeft);
+    g.setColour(juce::Colour(0xffdce1e6));
+    g.setFont(juce::Font(juce::FontOptions(9.0f)));
+    g.drawText("AUDIO TOOLS", 27, 39, 90, 15, juce::Justification::centredLeft);
+}
+
 NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFVocalHarmonizerAudioProcessor& p)
     : AudioProcessorEditor(&p), audioProcessor(p), rail(p.apvts)
 {
     setLookAndFeel(&look);
+
+    constrainer.setFixedAspectRatio(static_cast<double>(designWidth) / static_cast<double>(designHeight));
+    constrainer.setSizeLimits(820, 548, 1536, 1024);
+    setConstrainer(&constrainer);
     setResizable(true, true);
-    setResizeLimits(820, 548, 1536, 1024);
-    setSize(1100, 734);
+    setSize(designWidth, designHeight);
+
+    addAndMakeVisible(canvas);
+    canvas.setInterceptsMouseClicks(false, true);
 
     configureKnob(harmony, "HARMONY", juce::Colour(cyan), 0, "%");
     configureKnob(formant, "FORMANT", juce::Colour(cyan), 2, " st");
     configureKnob(humanize, "HUMANIZE", juce::Colour(violet), 0, "%");
     configureKnob(width, "WIDTH", juce::Colour(cyan), 0, "%");
     configureKnob(mix, "MIX", juce::Colour(cyan), 0, "%");
+
     for (juce::Component* c : { static_cast<juce::Component*>(&rail),
                                 static_cast<juce::Component*>(&trace),
                                 static_cast<juce::Component*>(&inputMeter),
@@ -37,18 +71,21 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
                                 static_cast<juce::Component*>(&humanize),
                                 static_cast<juce::Component*>(&width),
                                 static_cast<juce::Component*>(&mix) })
-        addAndMakeVisible(c);
+        canvas.addAndMakeVisible(c);
 
     prepareLabel(harmonyLabel, "HARMONY"); prepareLabel(formantLabel, "FORMANT");
     prepareLabel(humanizeLabel, "HUMANIZE"); prepareLabel(widthLabel, "WIDTH"); prepareLabel(mixLabel, "MIX");
-    for (auto* l : { &harmonyLabel, &formantLabel, &humanizeLabel, &widthLabel, &mixLabel }) addAndMakeVisible(l);
+    for (auto* l : { &harmonyLabel, &formantLabel, &humanizeLabel, &widthLabel, &mixLabel })
+        canvas.addAndMakeVisible(l);
 
     keyBox.addItemList(nf::params::keyNames(), 1);
     scaleBox.addItemList(nf::params::scaleNames(), 1);
-    for (auto* c : { &keyBox, &scaleBox, &presetBox }) addAndMakeVisible(c);
+    for (auto* c : { &keyBox, &scaleBox, &presetBox })
+        canvas.addAndMakeVisible(c);
 
     for (auto* b : { &autoKeyButton, &analyzeButton, &harmonizeButton, &powerButton, &prevButton, &nextButton,
-                     &aButton, &bButton, &copyButton, &saveButton }) addAndMakeVisible(b);
+                     &aButton, &bButton, &copyButton, &saveButton })
+        canvas.addAndMakeVisible(b);
     autoKeyButton.setClickingTogglesState(true);
     harmonizeButton.setClickingTogglesState(true);
     powerButton.setClickingTogglesState(true);
@@ -81,7 +118,7 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     detectedLabel.setJustificationType(juce::Justification::centred);
     detectedLabel.setFont(juce::Font(juce::FontOptions(18.0f, juce::Font::bold)));
     detectedLabel.setColour(juce::Label::textColourId, juce::Colour(cyan));
-    addAndMakeVisible(detectedLabel);
+    canvas.addAndMakeVisible(detectedLabel);
 
     harmonyAtt = std::make_unique<SliderAttachment>(p.apvts, nf::params::harmony, harmony);
     formantAtt = std::make_unique<SliderAttachment>(p.apvts, nf::params::formant, formant);
@@ -93,6 +130,8 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     powerAtt = std::make_unique<ButtonAttachment>(p.apvts, nf::params::power, powerButton);
     keyAtt = std::make_unique<ComboAttachment>(p.apvts, nf::params::key, keyBox);
     scaleAtt = std::make_unique<ComboAttachment>(p.apvts, nf::params::scale, scaleBox);
+
+    layoutFixedCanvas();
     refreshPresetList();
     startTimerHz(30);
 }
@@ -112,32 +151,19 @@ void NFVocalHarmonizerAudioProcessorEditor::configureKnob(juce::Slider& s, const
     s.setDoubleClickReturnValue(true, name == "FORMANT" ? 0.0 : name == "MIX" ? 50.0 : name == "HARMONY" ? 70.0 : name == "HUMANIZE" ? 35.0 : 100.0);
 }
 
-void NFVocalHarmonizerAudioProcessorEditor::paint(juce::Graphics& g)
+void NFVocalHarmonizerAudioProcessorEditor::layoutFixedCanvas()
 {
-    juce::ColourGradient bg(juce::Colour(0xff34383c), 0, 0, juce::Colour(0xff111419), 0, static_cast<float>(getHeight()), false);
-    g.setGradientFill(bg); g.fillAll();
-    g.setColour(juce::Colour(0xffaab0b5)); g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(3.0f), 9.0f, 2.0f);
-    g.setColour(juce::Colour(0xff0a0d11)); g.fillRect(6, 6, getWidth()-12, 64);
-    g.setColour(juce::Colour(0xffeceff2)); g.setFont(juce::Font(juce::FontOptions(28.0f, juce::Font::bold)));
-    g.drawFittedText("NF Vocal Harmonizer", 250, 13, getWidth()-500, 33, juce::Justification::centred, 1);
-    g.setColour(juce::Colour(0xffb7bec7)); g.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
-    g.drawFittedText("INTELLIGENT VOCAL HARMONY", 250, 44, getWidth()-500, 15, juce::Justification::centred, 1);
-    g.setColour(juce::Colour(cyan)); g.setFont(juce::Font(juce::FontOptions(15.0f, juce::Font::bold)));
-    g.drawText("NF", 26, 16, 42, 25, juce::Justification::centredLeft);
-    g.setColour(juce::Colour(0xffdce1e6)); g.setFont(juce::Font(juce::FontOptions(9.0f)));
-    g.drawText("AUDIO TOOLS", 27, 39, 90, 15, juce::Justification::centredLeft);
-}
+    // Layout is locked to the design canvas. Resize only scales this composition.
+    canvas.setBounds(0, 0, designWidth, designHeight);
 
-void NFVocalHarmonizerAudioProcessorEditor::resized()
-{
-    auto b = getLocalBounds().reduced(18);
+    auto b = juce::Rectangle<int>(0, 0, designWidth, designHeight).reduced(18);
     auto header = b.removeFromTop(44); b.removeFromTop(18);
     powerButton.setBounds(header.removeFromRight(62)); header.removeFromRight(8);
     saveButton.setBounds(header.removeFromRight(54)); copyButton.setBounds(header.removeFromRight(54));
     bButton.setBounds(header.removeFromRight(34)); aButton.setBounds(header.removeFromRight(34));
     nextButton.setBounds(header.removeFromRight(28)); presetBox.setBounds(header.removeFromRight(128)); prevButton.setBounds(header.removeFromRight(28));
 
-    const int meterW = juce::jlimit(125, 205, getWidth()/7);
+    constexpr int meterW = 157;
     auto leftArea = b.removeFromLeft(meterW); b.removeFromLeft(14);
     auto rightArea = b.removeFromRight(meterW); b.removeFromRight(14);
     inputMeter.setBounds(leftArea); outputMeter.setBounds(rightArea);
@@ -153,7 +179,7 @@ void NFVocalHarmonizerAudioProcessorEditor::resized()
     harmonizeButton.setBounds(b.removeFromBottom(62).reduced(60, 7));
     rail.setBounds(b.reduced(70, 2));
 
-    const int cell = controls.getWidth()/5;
+    const int cell = controls.getWidth() / 5;
     juce::Slider* sliders[] { &harmony, &formant, &humanize, &width, &mix };
     juce::Label* labels[] { &harmonyLabel, &formantLabel, &humanizeLabel, &widthLabel, &mixLabel };
     for (int i = 0; i < 5; ++i)
@@ -162,6 +188,26 @@ void NFVocalHarmonizerAudioProcessorEditor::resized()
         labels[i]->setBounds(area.removeFromTop(22));
         sliders[i]->setBounds(area.reduced(8, 0));
     }
+}
+
+void NFVocalHarmonizerAudioProcessorEditor::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colour(0xff0b0f14));
+}
+
+void NFVocalHarmonizerAudioProcessorEditor::resized()
+{
+    const auto scaleX = static_cast<float>(getWidth()) / static_cast<float>(designWidth);
+    const auto scaleY = static_cast<float>(getHeight()) / static_cast<float>(designHeight);
+    const auto scale = juce::jmin(scaleX, scaleY);
+    const auto scaledW = static_cast<int>(std::round(static_cast<float>(designWidth) * scale));
+    const auto scaledH = static_cast<int>(std::round(static_cast<float>(designHeight) * scale));
+    const auto x = (getWidth() - scaledW) / 2;
+    const auto y = (getHeight() - scaledH) / 2;
+
+    canvas.setTransform(juce::AffineTransform());
+    canvas.setBounds(x, y, designWidth, designHeight);
+    canvas.setTransform(juce::AffineTransform::scale(scale));
 }
 
 void NFVocalHarmonizerAudioProcessorEditor::timerCallback()
