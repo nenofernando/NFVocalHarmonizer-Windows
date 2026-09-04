@@ -21,6 +21,8 @@ void HarmonyEngine::prepare(double sampleRate, int maximumBlockSize, int channel
     ratioSmooth.setCurrentAndTargetValue(1.0f);
     voicedSmooth.reset(sampleRate, 0.025);
     voicedSmooth.setCurrentAndTargetValue(0.0f);
+    manualOffsetSmooth.reset(sampleRate, 0.030);
+    manualOffsetSmooth.setCurrentAndTargetValue(0.0f);
     reset();
 }
 
@@ -38,6 +40,7 @@ void HarmonyEngine::reset()
     randomState = 0x75A3E19Du;
     ratioSmooth.setCurrentAndTargetValue(1.0f);
     voicedSmooth.setCurrentAndTargetValue(0.0f);
+    manualOffsetSmooth.setCurrentAndTargetValue(0.0f);
     pitchHz.store(0.0f); pitchMidi.store(0.0f); pitchConfidence.store(0.0f); pitchVoiced.store(false);
     detectedRoot.store(7); detectedType.store(static_cast<int>(ScaleType::naturalMinor)); detectedConfidence.store(0.0f);
     resetKeyRequested.store(false);
@@ -79,7 +82,9 @@ float HarmonyEngine::processFormantColour(int channel, float sample, float forma
     return sample + norm * (norm >= 0.0f ? 0.55f * high : 0.45f * lp);
 }
 
-void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySettings& s)
+void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySettings& s,
+                            double hostTimeSec, const notes::OffsetTable* offsets,
+                            notes::PitchSampleRing* captureRing, bool captureArmed)
 {
     if (resetKeyRequested.exchange(false, std::memory_order_acq_rel))
     {
@@ -111,6 +116,7 @@ void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySetti
                        * juce::jlimit(0.0f, 1.25f, s.harmonyPercent * 0.01f);
     const auto width = juce::jlimit(0.0f, 1.0f, s.widthPercent * 0.01f);
     const auto human = juce::jlimit(0.0f, 1.0f, s.humanizePercent * 0.01f);
+    const double invSr = currentSampleRate > 0.0 ? 1.0 / currentSampleRate : 0.0;
 
     auto* left = buffer.getWritePointer(0);
     auto* right = channels > 1 ? buffer.getWritePointer(1) : nullptr;
@@ -123,6 +129,10 @@ void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySetti
         localInL = juce::jmax(localInL, std::abs(inputL));
         localInR = juce::jmax(localInR, std::abs(inputR));
 
+        const double sampleTime = hostTimeSec + static_cast<double>(i) * invSr;
+        const float desiredOffset = offsets != nullptr ? offsets->offsetAt(sampleTime) : 0.0f;
+        manualOffsetSmooth.setTargetValue(desiredOffset);
+
         if (pitchDetector.pushSample(mono))
         {
             const auto estimate = pitchDetector.getEstimate();
@@ -130,6 +140,16 @@ void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySetti
             pitchMidi.store(estimate.midiNote, std::memory_order_relaxed);
             pitchConfidence.store(estimate.confidence, std::memory_order_relaxed);
             pitchVoiced.store(estimate.voiced, std::memory_order_relaxed);
+
+            if (captureArmed && captureRing != nullptr)
+            {
+                notes::PitchSample sample;
+                sample.timeSec = sampleTime;
+                sample.midi = estimate.midiNote;
+                sample.confidence = estimate.confidence;
+                sample.voiced = estimate.voiced;
+                captureRing->push(sample);
+            }
 
             if (estimate.voiced)
             {
@@ -147,9 +167,10 @@ void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySetti
                     }
                 }
 
-                const auto target = MusicalScale::targetMidi(estimate.midiNote, s.intervalChoice,
-                                                              activeRoot, activeScale);
-                ratioSmooth.setTargetValue(std::pow(2.0f, (target - estimate.midiNote) / 12.0f));
+                // Automatic diatonic target only. Manual offset is applied sample-by-sample below.
+                const auto autoTarget = MusicalScale::targetMidi(estimate.midiNote, s.intervalChoice,
+                                                                  activeRoot, activeScale);
+                ratioSmooth.setTargetValue(std::pow(2.0f, (autoTarget - estimate.midiNote) / 12.0f));
                 voicedSmooth.setTargetValue(1.0f);
             }
             else
@@ -158,9 +179,12 @@ void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySetti
             }
         }
 
+        const auto offsetSemis = manualOffsetSmooth.getNextValue();
+        const auto offsetRatio = std::pow(2.0f, offsetSemis / 12.0f);
+
         driftL += 0.00035f * (nextRandomBipolar() - driftL);
         driftR += 0.00029f * (nextRandomBipolar() - driftR);
-        const auto ratio = ratioSmooth.getNextValue();
+        const auto ratio = ratioSmooth.getNextValue() * offsetRatio;
         const auto centsAmount = 7.0f * human * width;
         const auto ratioL = ratio * std::pow(2.0f, driftL * centsAmount / 1200.0f);
         const auto ratioR = ratio * std::pow(2.0f, driftR * centsAmount / 1200.0f);

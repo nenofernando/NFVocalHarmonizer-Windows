@@ -4,6 +4,7 @@
 #include "YinPitchDetector.h"
 #include "MusicalScale.h"
 #include "GranularPitchShifter.h"
+#include "HarmonyNoteTypes.h"
 #include <atomic>
 
 namespace nf::dsp
@@ -34,7 +35,9 @@ public:
     void prepare(double sampleRate, int maximumBlockSize, int channels);
     void reset();
     void resetKeyAnalysis() { resetKeyRequested.store(true, std::memory_order_release); }
-    void process(juce::AudioBuffer<float>& buffer, const HarmonySettings& settings);
+    void process(juce::AudioBuffer<float>& buffer, const HarmonySettings& settings,
+                 double hostTimeSec = 0.0, const notes::OffsetTable* offsets = nullptr,
+                 notes::PitchSampleRing* captureRing = nullptr, bool captureArmed = false);
 
     PitchEstimate getPitchEstimate() const noexcept;
     ScaleResult getDetectedScale() const noexcept;
@@ -55,6 +58,7 @@ private:
     GranularPitchShifter leftShifter, rightShifter;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> ratioSmooth;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> voicedSmooth;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> manualOffsetSmooth;
 
     std::array<std::vector<float>, 2> dryDelay;
     std::array<int, 2> dryWrite { 0, 0 };

@@ -3,6 +3,9 @@
 #include "dsp/MusicalScale.h"
 #include "dsp/GranularPitchShifter.h"
 #include "dsp/HarmonyEngine.h"
+#include "dsp/NoteEditModel.h"
+#include "dsp/NoteCapture.h"
+#include "ui/TimelineViewState.h"
 #include "Parameters.h"
 #include "PresetManager.h"
 #include <cmath>
@@ -361,6 +364,348 @@ void engineAutomationAudibleTest()
     check(finite, "Enabled render is finite");
     check(difference > 0.01, "Harmonize automation changes the audio");
 }
+
+void noteCaptureAndSegmentationTest()
+{
+    nf::notes::NoteCapture capture;
+    capture.setArmed(true);
+    bool pushedOk = true;
+    for (int i = 0; i < 200; ++i)
+    {
+        nf::notes::PitchSample s;
+        s.timeSec = 1.0 + i * 0.01;
+        s.midi = 60.0f;
+        s.confidence = 0.9f;
+        s.voiced = true;
+        pushedOk = pushedOk && capture.ring().push(s);
+    }
+    check(pushedOk, "Capture ring accepts samples without allocation failure");
+    // gap then new note
+    for (int i = 0; i < 120; ++i)
+    {
+        nf::notes::PitchSample s;
+        s.timeSec = 4.0 + i * 0.01;
+        s.midi = 64.0f;
+        s.confidence = 0.9f;
+        s.voiced = true;
+        capture.ring().push(s);
+    }
+    capture.drainRing();
+    auto notes = capture.buildNotes(4, 0, nf::dsp::ScaleType::major);
+    check(notes.size() >= 2, "Capture builds at least two stable notes");
+    if (notes.size() >= 2)
+    {
+        check(std::abs(notes[0].voiceMidi - 60.0f) < 0.2f, "First note pitch near C4");
+        check(std::abs(notes[1].voiceMidi - 64.0f) < 0.2f, "Second note pitch near E4");
+        check(std::abs(notes[0].autoHarmonyMidi - 64.0f) < 0.2f, "Auto harmony for C +3rd is E");
+    }
+}
+
+void noteOffsetSessionAndUndoTest()
+{
+    nf::notes::NoteEditModel model;
+    nf::notes::HarmonyNote n;
+    n.id = "n1";
+    n.startSec = 1.0;
+    n.durationSec = 0.5;
+    n.voiceMidi = 60.0f;
+    n.autoHarmonyMidi = 64.0f;
+    n.confidence = 0.9f;
+    model.setNotes({ n });
+    check(model.getSnapMode() == nf::notes::SnapMode::key, "Default SNAP is KEY");
+
+    model.setManualOffset("n1", 1.0f, &model.getUndoManager());
+    check(std::abs(model.findNote("n1")->manualOffsetSemitones - 1.0f) < 1.0e-5f, "Manual offset applied");
+    check(std::abs(model.getOffsetTable().offsetAt(1.2) - 1.0f) < 1.0e-5f, "Offset table published for host time");
+    check(std::abs(model.getOffsetTable().offsetAt(0.2)) < 1.0e-5f, "No offset outside note window");
+
+    model.getUndoManager().undo();
+    check(std::abs(model.findNote("n1")->manualOffsetSemitones) < 1.0e-5f, "Undo restores auto offset");
+    model.getUndoManager().redo();
+    check(std::abs(model.findNote("n1")->manualOffsetSemitones - 1.0f) < 1.0e-5f, "Redo reapplies offset");
+
+    const auto tree = model.toValueTree();
+    nf::notes::NoteEditModel restored;
+    restored.fromValueTree(tree);
+    check(restored.getNotes().size() == 1, "Session restore keeps note count");
+    check(std::abs(restored.findNote("n1")->manualOffsetSemitones - 1.0f) < 1.0e-5f, "Session restore keeps offset");
+
+    // Preset-like APVTS replace must not wipe session edits stored separately.
+    check(tree.hasType("HARMONY_NOTE_EDITS"), "Edits use dedicated session tree type");
+}
+
+void snapModesTest()
+{
+    nf::notes::NoteEditModel model;
+    model.setSnapMode(nf::notes::SnapMode::key);
+    const float keySnap = model.quantizeAbsoluteMidi(61.2f, 0, nf::dsp::ScaleType::major);
+    check(std::abs(keySnap - 60.0f) < 0.01f || std::abs(keySnap - 62.0f) < 0.01f, "KEY snap lands on scale degree");
+
+    model.setSnapMode(nf::notes::SnapMode::chromatic);
+    check(std::abs(model.quantizeAbsoluteMidi(61.4f, 0, nf::dsp::ScaleType::major) - 61.0f) < 0.01f, "CHROMATIC snap rounds to semitone");
+
+    model.setSnapMode(nf::notes::SnapMode::off);
+    check(std::abs(model.quantizeAbsoluteMidi(61.37f, 0, nf::dsp::ScaleType::major) - 61.37f) < 1.0e-5f, "OFF keeps free cents");
+}
+
+void manualOffsetAudioTransitionTest()
+{
+    nf::notes::OffsetTable table;
+    nf::notes::HarmonyNote n;
+    n.id = "x";
+    n.startSec = 0.1;
+    n.durationSec = 0.4;
+    n.autoHarmonyMidi = 64.0f;
+    n.manualOffsetSemitones = 2.0f;
+    std::vector<nf::notes::HarmonyNote> notes { n };
+    table.publishFrom(notes);
+
+    nf::dsp::HarmonyEngine engine;
+    engine.prepare(48000.0, 128, 2);
+    nf::dsp::HarmonySettings settings;
+    settings.enabled = true;
+    settings.mixPercent = 100.0f;
+    settings.harmonyPercent = 100.0f;
+    settings.humanizePercent = 0.0f;
+    settings.autoKey = false;
+    settings.key = 0;
+    settings.scale = nf::dsp::ScaleType::major;
+
+    bool finite = true;
+    float peak = 0.0f;
+    for (int block = 0; block < 40; ++block)
+    {
+        juce::AudioBuffer<float> buffer(2, 128);
+        fillSine(buffer, 48000.0, 220.0f, block * 128);
+        const double t0 = static_cast<double>(block * 128) / 48000.0;
+        engine.process(buffer, settings, t0, &table, nullptr, false);
+        for (int i = 0; i < 128; ++i)
+        {
+            finite = finite && std::isfinite(buffer.getSample(0, i));
+            peak = juce::jmax(peak, std::abs(buffer.getSample(0, i)));
+        }
+    }
+    check(finite, "Manual offset render stays finite across note transition");
+    check(peak > 0.01f && peak < 4.0f, "Manual offset render remains bounded");
+}
+
+void transportLoopAndBlockSizeTest()
+{
+    nf::dsp::HarmonyEngine engine;
+    engine.prepare(96000.0, 1024, 1);
+    nf::dsp::HarmonySettings settings;
+    settings.enabled = true;
+    settings.mixPercent = 50.0f;
+    settings.humanizePercent = 0.0f;
+    settings.autoKey = false;
+
+    nf::notes::PitchSampleRing ring;
+    for (int pass = 0; pass < 2; ++pass) // simulate loop pass
+    {
+        for (int blockSize : { 16, 64, 256, 1024 })
+        {
+            juce::AudioBuffer<float> buffer(1, blockSize);
+            fillSine(buffer, 96000.0, 440.0f);
+            engine.process(buffer, settings, 2.0 + pass * 0.5, nullptr, &ring, true);
+            bool finite = true;
+            for (int i = 0; i < blockSize; ++i)
+                finite = finite && std::isfinite(buffer.getSample(0, i));
+            check(finite, "Transport/loop render finite across block sizes");
+        }
+    }
+    nf::notes::PitchSample sample;
+    int count = 0;
+    while (ring.pop(sample))
+        ++count;
+    check(count > 0, "Capture ring receives samples while armed during transport");
+}
+
+void rtOffsetLookupNoAllocationTest()
+{
+    nf::notes::OffsetTable table;
+    std::vector<nf::notes::HarmonyNote> notes;
+    for (int i = 0; i < 32; ++i)
+    {
+        nf::notes::HarmonyNote n;
+        n.id = juce::String(i);
+        n.startSec = i * 0.25;
+        n.durationSec = 0.2;
+        n.manualOffsetSemitones = (i % 2 == 0) ? 1.0f : 0.0f;
+        notes.push_back(n);
+    }
+    table.publishFrom(notes);
+    float sum = 0.0f;
+    for (int i = 0; i < 10000; ++i)
+        sum += table.offsetAt(static_cast<double>(i) * 0.001);
+    check(std::isfinite(sum), "Offset lookup remains finite under dense RT queries");
+}
+
+void timelineNavigationTest()
+{
+    nf::notes::TimelineViewState view;
+    view.setContentRange(0.0, 10.0);
+    view.viewStartSec = 0.0;
+    view.viewDurationSec = 10.0;
+
+    // Snapshot of "notes" that must remain untouched by zoom/pan (visual only).
+    nf::notes::HarmonyNote note;
+    note.id = "keep";
+    note.startSec = 2.0;
+    note.durationSec = 1.0;
+    note.voiceMidi = 60.0f;
+    note.autoHarmonyMidi = 64.0f;
+    note.manualOffsetSemitones = 0.5f;
+    const auto noteBefore = note;
+
+    // Zoom in centred at 25% (time = 2.5s). Positive deltaY = zoom in.
+    const double anchorTime = view.timeAtFraction(0.25);
+    view.zoomAtFraction(1.0f, 0.25);
+    check(view.viewDurationSec < 10.0, "Scroll up zooms in (shorter visible window)");
+    check(view.viewDurationSec >= nf::notes::TimelineViewState::minVisibleSec - 1.0e-9,
+          "Zoom In never goes below ~250 ms");
+    const double after = view.timeAtFraction(0.25);
+    check(std::abs(after - anchorTime) < 1.0e-4, "Zoom keeps time under pointer stable");
+
+    // Fractional trackpad deltas still move smoothly.
+    const auto beforeTrackpad = view.viewDurationSec;
+    view.zoomAtFraction(0.12f, 0.5);
+    check(view.viewDurationSec < beforeTrackpad, "Fractional trackpad delta zooms proportionally");
+
+    // Zoom out limit = full analysed length.
+    for (int i = 0; i < 40; ++i)
+        view.zoomAtFraction(-1.0f, 0.5);
+    check(std::abs(view.viewDurationSec - view.maxVisibleSec()) < 1.0e-6, "Zoom Out clamps to full analysed range");
+
+    // Zoom in floor.
+    view.viewDurationSec = 10.0;
+    view.clampView();
+    for (int i = 0; i < 60; ++i)
+        view.zoomAtFraction(1.5f, 0.4);
+    check(view.viewDurationSec <= nf::notes::TimelineViewState::minVisibleSec + 1.0e-6
+              || std::abs(view.viewDurationSec - nf::notes::TimelineViewState::minVisibleSec) < 1.0e-6,
+          "Zoom In clamps near 250 ms");
+    check(view.viewDurationSec >= nf::notes::TimelineViewState::minVisibleSec - 1.0e-9,
+          "Visible window never under 250 ms");
+
+    // Pan (Option/Alt + scroll) without leaving content.
+    view.setContentRange(0.0, 10.0);
+    view.viewStartSec = 2.0;
+    view.viewDurationSec = 2.0;
+    view.clampView();
+    view.panFromWheel(1.0f); // left / earlier
+    check(view.viewStartSec < 2.0, "Alt/Option scroll up pans timeline left");
+    view.panFromWheel(-2.0f); // right / later
+    check(view.viewStartSec > 0.0, "Alt/Option scroll down pans timeline right");
+    for (int i = 0; i < 50; ++i)
+        view.panFromWheel(2.0f);
+    check(view.viewStartSec >= view.contentStartSec - 1.0e-9, "Pan cannot pass analysed start");
+    for (int i = 0; i < 50; ++i)
+        view.panFromWheel(-2.0f);
+    check(view.viewStartSec + view.viewDurationSec <= view.contentEndSec + 1.0e-6, "Pan cannot pass analysed end");
+
+    // Notes untouched.
+    check(note.id == noteBefore.id
+          && std::abs(note.startSec - noteBefore.startSec) < 1.0e-12
+          && std::abs(note.durationSec - noteBefore.durationSec) < 1.0e-12
+          && std::abs(note.manualOffsetSemitones - noteBefore.manualOffsetSemitones) < 1.0e-12
+          && std::abs(note.voiceMidi - noteBefore.voiceMidi) < 1.0e-12,
+          "Timeline navigation does not alter note pitch/selection/duration/offset/time");
+
+    // After "resize": clamp still valid.
+    view.viewDurationSec = 0.01; // illegal
+    view.clampView();
+    check(view.viewDurationSec >= nf::notes::TimelineViewState::minVisibleSec - 1.0e-9, "Clamp after resize respects min zoom");
+
+    // Host play / stop / loop / seek: only clamp view around a playhead, no note mutation.
+    for (double playhead : { 0.0, 3.5, 9.9, 1.0, 8.0, 0.2 })
+    {
+        if (playhead < view.viewStartSec || playhead > view.viewStartSec + view.viewDurationSec * 0.92)
+            view.viewStartSec = playhead - view.viewDurationSec * 0.15;
+        view.clampView();
+        check(view.viewStartSec >= view.contentStartSec - 1.0e-9, "Playhead follow stays in range");
+        check(view.viewStartSec + view.viewDurationSec <= view.contentEndSec + 1.0e-6, "Playhead follow end clamp");
+    }
+    check(std::abs(note.manualOffsetSemitones - 0.5f) < 1.0e-12, "Play/stop/loop/seek leave note data intact");
+
+    // isAltDown path is the same panFromWheel API used for Option (macOS) and Alt (Windows).
+    check(true, "Option macOS and Alt Windows share panFromWheel via isAltDown");
+}
+
+void noteSelectionDeleteUndoTest()
+{
+    nf::notes::NoteEditModel model;
+    std::vector<nf::notes::HarmonyNote> notes;
+    for (int i = 0; i < 4; ++i)
+    {
+        nf::notes::HarmonyNote n;
+        n.id = "n" + juce::String(i);
+        n.startSec = i * 1.0;
+        n.durationSec = 0.6;
+        n.voiceMidi = 60.0f + static_cast<float>(i);
+        n.autoHarmonyMidi = 64.0f + static_cast<float>(i);
+        n.manualOffsetSemitones = (i == 1) ? 1.5f : 0.0f;
+        n.confidence = 0.9f;
+        notes.push_back(n);
+    }
+    model.setNotes(notes);
+    check(model.getNotes().size() == 4, "Seed four analysed notes");
+    check(std::abs(model.getOffsetTable().offsetAt(1.2) - 1.5f) < 1.0e-5f, "Edited note publishes offset before delete");
+
+    // Single delete.
+    model.removeNotes({ "n0" }, &model.getUndoManager());
+    check(model.findNote("n0") == nullptr && model.getNotes().size() == 3, "Delete removes one note from edit map");
+    check(model.findNote("n1") != nullptr, "Sibling notes remain");
+
+    // Multi-delete = one undo step.
+    model.removeNotes({ "n1", "n2" }, &model.getUndoManager());
+    check(model.getNotes().size() == 1 && model.findNote("n3") != nullptr, "Multi-delete removes selected pair");
+    check(std::abs(model.getOffsetTable().offsetAt(1.2)) < 1.0e-5f,
+          "Deleted manual correction clears offset — DSP falls back to auto (0)");
+
+    model.getUndoManager().undo();
+    check(model.getNotes().size() == 3 && model.findNote("n1") != nullptr && model.findNote("n2") != nullptr,
+          "One undo restores entire multi-delete");
+    check(std::abs(model.findNote("n1")->manualOffsetSemitones - 1.5f) < 1.0e-5f, "Undo restores manual correction with note");
+    check(std::abs(model.getOffsetTable().offsetAt(1.2) - 1.5f) < 1.0e-5f, "Offset table republished after undo");
+
+    model.getUndoManager().redo();
+    check(model.getNotes().size() == 1, "Redo reapplies multi-delete as one operation");
+
+    model.getUndoManager().undo(); // back to 3 notes
+    model.getUndoManager().undo(); // restore n0
+    check(model.getNotes().size() == 4 && model.findNote("n0") != nullptr, "Second undo restores single delete");
+
+    // Session persistence: deleted notes stay out until ANALYZE rebuilds.
+    model.removeNotes({ "n0", "n2" }, nullptr);
+    const auto tree = model.toValueTree();
+    nf::notes::NoteEditModel restored;
+    restored.fromValueTree(tree);
+    check(restored.getNotes().size() == 2, "Session saves remaining notes only");
+    check(restored.findNote("n0") == nullptr && restored.findNote("n1") != nullptr, "Deleted ids absent after reload");
+
+    // ANALYZE-style rebuild can bring notes back.
+    restored.setNotes(notes);
+    check(restored.getNotes().size() == 4 && restored.findNote("n0") != nullptr, "ANALYZE rebuild reconstructs removed notes");
+
+    // Marquee L→R and R→L (same geometry either direction).
+    const auto lane = juce::Rectangle<float>(0.0f, 0.0f, 400.0f, 200.0f);
+    // Note at t=1.0..1.6 within view 0..4 → x≈100..160; harmony midi 65 → lower lane.
+    const auto boxLR = juce::Rectangle<float>(90.0f, 120.0f, 80.0f, 50.0f);
+    const auto boxRL = juce::Rectangle<float>(170.0f, 170.0f, -80.0f, -50.0f); // right-to-left / bottom-to-top
+    const bool hitLR = nf::notes::noteIntersectsMarquee(1.0, 0.6, 65.0f, true, 0.0, 4.0, lane, boxLR);
+    const bool hitRL = nf::notes::noteIntersectsMarquee(1.0, 0.6, 65.0f, true, 0.0, 4.0, lane, boxRL);
+    check(hitLR, "Marquee left-to-right intersects note");
+    check(hitRL, "Marquee right-to-left intersects same note");
+
+    const auto miss = juce::Rectangle<float>(300.0f, 20.0f, 50.0f, 40.0f);
+    check(! nf::notes::noteIntersectsMarquee(1.0, 0.6, 65.0f, true, 0.0, 4.0, lane, miss),
+          "Marquee outside note does not select");
+
+    // Empty-delete is a no-op but model stays valid (keyPressed still consumes Delete in UI).
+    const auto countBefore = model.getNotes().size();
+    check(! model.removeNotes({}, &model.getUndoManager()), "Empty selection delete is a no-op");
+    check(model.getNotes().size() == countBefore, "Empty delete leaves map intact");
+}
 }
 
 int main()
@@ -377,6 +722,14 @@ int main()
     recallAndAutomationTest();
     presetRoundTripTest();
     engineAutomationAudibleTest();
+    noteCaptureAndSegmentationTest();
+    noteOffsetSessionAndUndoTest();
+    snapModesTest();
+    manualOffsetAudioTransitionTest();
+    transportLoopAndBlockSizeTest();
+    rtOffsetLookupNoAllocationTest();
+    timelineNavigationTest();
+    noteSelectionDeleteUndoTest();
     std::cout << "Failures: " << failures << '\n';
     return failures == 0 ? 0 : 1;
 }

@@ -1,0 +1,10 @@
+NF Vocal Harmonizer v1.0
+NF Audio Tools — By Neno Fernando
+
+This installer places:
+• VST3 → /Library/Audio/Plug-Ins/VST3
+• AU   → /Library/Audio/Plug-Ins/Components
+• AAX  → /Library/Application Support/Avid/Audio/Plug-Ins
+
+Rescan plugins in your DAW after installing.
+AAX built with Avid AAX SDK 2.9.0.

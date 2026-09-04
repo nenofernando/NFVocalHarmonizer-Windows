@@ -1,5 +1,4 @@
 #include "PluginEditor.h"
-#include "dsp/MusicalScale.h"
 
 namespace
 {
@@ -28,33 +27,40 @@ void NFVocalHarmonizerAudioProcessorEditor::FixedCanvas::paint(juce::Graphics& g
                            9.0f, 2.0f);
     g.setColour(juce::Colour(0xff0a0d11));
     g.fillRect(6, 6, designWidth - 12, 64);
+    // Title locked to the absolute horizontal centre of the plugin.
     g.setColour(juce::Colour(0xffeceff2));
-    g.setFont(juce::Font(juce::FontOptions(28.0f, juce::Font::bold)));
-    g.drawFittedText("NF Vocal Harmonizer", 250, 13, designWidth - 500, 33, juce::Justification::centred, 1);
+    g.setFont(juce::Font(juce::FontOptions(26.0f, juce::Font::bold)));
+    g.drawFittedText("NF Vocal Harmonizer", 0, 14, designWidth, 28, juce::Justification::centred, 1);
     g.setColour(juce::Colour(0xffb7bec7));
-    g.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
-    g.drawFittedText("INTELLIGENT VOCAL HARMONY", 250, 44, designWidth - 500, 15, juce::Justification::centred, 1);
+    g.setFont(juce::Font(juce::FontOptions(9.0f, juce::Font::bold)));
+    g.drawFittedText("INTELLIGENT VOCAL HARMONY", 0, 44, designWidth, 14, juce::Justification::centred, 1);
     g.setColour(juce::Colour(cyan));
     g.setFont(juce::Font(juce::FontOptions(15.0f, juce::Font::bold)));
     g.drawText("NF", 26, 16, 42, 25, juce::Justification::centredLeft);
     g.setColour(juce::Colour(0xffdce1e6));
     g.setFont(juce::Font(juce::FontOptions(9.0f)));
     g.drawText("AUDIO TOOLS", 27, 39, 90, 15, juce::Justification::centredLeft);
+
+    g.setColour(juce::Colour(0xff9aa3ad));
+    g.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+    g.drawFittedText("v1.0", 0, designHeight - 28, designWidth, 18, juce::Justification::centred, 1);
 }
 
 NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFVocalHarmonizerAudioProcessor& p)
-    : AudioProcessorEditor(&p), audioProcessor(p), rail(p.apvts)
+    : AudioProcessorEditor(&p), audioProcessor(p), titleHitZone(*this), rail(p.apvts), noteEditor(p)
 {
     setLookAndFeel(&look);
 
     constrainer.setFixedAspectRatio(static_cast<double>(designWidth) / static_cast<double>(designHeight));
-    constrainer.setSizeLimits(820, 548, 1536, 1024);
+    constrainer.setSizeLimits(780, 521, 1536, 1024);
     setConstrainer(&constrainer);
     setResizable(true, true);
-    setSize(designWidth, designHeight);
+    setSize(defaultWidth, defaultHeight);
 
     addAndMakeVisible(canvas);
     canvas.setInterceptsMouseClicks(false, true);
+    canvas.addAndMakeVisible(titleHitZone);
+    titleHitZone.toFront(false);
 
     configureKnob(harmony, "HARMONY", juce::Colour(cyan), 0, "%");
     configureKnob(formant, "FORMANT", juce::Colour(cyan), 2, " st");
@@ -63,7 +69,7 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     configureKnob(mix, "MIX", juce::Colour(cyan), 0, "%");
 
     for (juce::Component* c : { static_cast<juce::Component*>(&rail),
-                                static_cast<juce::Component*>(&trace),
+                                static_cast<juce::Component*>(&noteEditor),
                                 static_cast<juce::Component*>(&inputMeter),
                                 static_cast<juce::Component*>(&outputMeter),
                                 static_cast<juce::Component*>(&harmony),
@@ -94,7 +100,15 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
 
     harmonizeButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff247aff));
     harmonizeButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
-    analyzeButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)] { if (safe != nullptr) safe->audioProcessor.resetKeyAnalysis(); };
+    analyzeButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)]
+    {
+        if (safe == nullptr)
+            return;
+        if (safe->audioProcessor.isAnalyzeArmed())
+            safe->audioProcessor.finalizeAnalyzeCapture();
+        else
+            safe->audioProcessor.beginAnalyzeCapture();
+    };
     aButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)] { if (safe != nullptr) safe->switchAB(true); };
     bButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)] { if (safe != nullptr) safe->switchAB(false); };
     copyButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)] {
@@ -156,12 +170,25 @@ void NFVocalHarmonizerAudioProcessorEditor::layoutFixedCanvas()
     // Layout is locked to the design canvas. Resize only scales this composition.
     canvas.setBounds(0, 0, designWidth, designHeight);
 
+    // Header bar (matches painted black strip). Keep a clear centre lane for the title.
+    auto headerBar = juce::Rectangle<int>(6, 10, designWidth - 12, 56);
+    auto right = headerBar.removeFromRight(292);
+    powerButton.setBounds(right.removeFromRight(40).reduced(2, 8));
+    right.removeFromRight(4);
+    saveButton.setBounds(right.removeFromRight(40).reduced(1, 12));
+    copyButton.setBounds(right.removeFromRight(40).reduced(1, 12));
+    bButton.setBounds(right.removeFromRight(24).reduced(1, 12));
+    aButton.setBounds(right.removeFromRight(24).reduced(1, 12));
+    nextButton.setBounds(right.removeFromRight(20).reduced(1, 12));
+    presetBox.setBounds(right.removeFromRight(88).reduced(0, 12));
+    prevButton.setBounds(right.removeFromRight(20).reduced(1, 12));
+
+    // Clickable title zone — restores default window size when enlarged.
+    titleHitZone.setBounds((designWidth - 360) / 2, 10, 360, 52);
+    titleHitZone.toFront(false);
+
     auto b = juce::Rectangle<int>(0, 0, designWidth, designHeight).reduced(18);
-    auto header = b.removeFromTop(44); b.removeFromTop(18);
-    powerButton.setBounds(header.removeFromRight(62)); header.removeFromRight(8);
-    saveButton.setBounds(header.removeFromRight(54)); copyButton.setBounds(header.removeFromRight(54));
-    bButton.setBounds(header.removeFromRight(34)); aButton.setBounds(header.removeFromRight(34));
-    nextButton.setBounds(header.removeFromRight(28)); presetBox.setBounds(header.removeFromRight(128)); prevButton.setBounds(header.removeFromRight(28));
+    b.removeFromTop(58); // below header title/controls
 
     constexpr int meterW = 157;
     auto leftArea = b.removeFromLeft(meterW); b.removeFromLeft(14);
@@ -175,7 +202,7 @@ void NFVocalHarmonizerAudioProcessorEditor::layoutFixedCanvas()
     keyBox.setBounds(top.removeFromLeft(72).reduced(3, 28));
     scaleBox.setBounds(top.removeFromLeft(135).reduced(3, 28));
     detectedLabel.setBounds(top.reduced(4, 27));
-    trace.setBounds(b.removeFromTop(70)); b.removeFromTop(7);
+    noteEditor.setBounds(b.removeFromTop(70)); b.removeFromTop(7);
     harmonizeButton.setBounds(b.removeFromBottom(62).reduced(60, 7));
     rail.setBounds(b.reduced(70, 2));
 
@@ -193,6 +220,12 @@ void NFVocalHarmonizerAudioProcessorEditor::layoutFixedCanvas()
 void NFVocalHarmonizerAudioProcessorEditor::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xff0b0f14));
+}
+
+void NFVocalHarmonizerAudioProcessorEditor::resetToDefaultSize()
+{
+    if (getWidth() > defaultWidth + 2 || getHeight() > defaultHeight + 2)
+        setSize(defaultWidth, defaultHeight);
 }
 
 void NFVocalHarmonizerAudioProcessorEditor::resized()
@@ -214,7 +247,6 @@ void NFVocalHarmonizerAudioProcessorEditor::timerCallback()
 {
     const auto meters = audioProcessor.getMeters();
     inputMeter.setLevels(meters.inputPeakL, meters.inputPeakR); outputMeter.setLevels(meters.outputPeakL, meters.outputPeakR);
-    const auto pitch = audioProcessor.getPitchEstimate();
     auto root = juce::roundToInt(audioProcessor.apvts.getRawParameterValue(nf::params::key)->load());
     auto scale = static_cast<nf::dsp::ScaleType>(juce::roundToInt(audioProcessor.apvts.getRawParameterValue(nf::params::scale)->load()));
     const bool autoMode = audioProcessor.apvts.getRawParameterValue(nf::params::autoKey)->load() > 0.5f;
@@ -225,10 +257,9 @@ void NFVocalHarmonizerAudioProcessorEditor::timerCallback()
     }
     else detectedLabel.setText(nf::params::keyNames()[root] + "  " + nf::params::scaleNames()[static_cast<int>(scale)].toUpperCase(),
                                juce::dontSendNotification);
-    keyBox.setEnabled(! autoMode); scaleBox.setEnabled(! autoMode); analyzeButton.setEnabled(autoMode);
-    const int interval = juce::roundToInt(audioProcessor.apvts.getRawParameterValue(nf::params::interval)->load());
-    const float harmonyMidi = pitch.voiced ? nf::dsp::MusicalScale::targetMidi(pitch.midiNote, interval, root, scale) : 0.0f;
-    trace.add(pitch.midiNote, harmonyMidi, pitch.voiced);
+    keyBox.setEnabled(! autoMode); scaleBox.setEnabled(! autoMode);
+    analyzeButton.setEnabled(true);
+    analyzeButton.setButtonText(audioProcessor.isAnalyzeArmed() ? "ARM..." : "ANALYZE");
 }
 
 void NFVocalHarmonizerAudioProcessorEditor::refreshPresetList(const juce::String& select)

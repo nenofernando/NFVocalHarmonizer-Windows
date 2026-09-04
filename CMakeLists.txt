@@ -97,12 +97,19 @@ target_sources(NFVocalHarmonizer PRIVATE
     Source/dsp/GranularPitchShifter.h
     Source/dsp/HarmonyEngine.cpp
     Source/dsp/HarmonyEngine.h
+    Source/dsp/NoteEditModel.cpp
+    Source/dsp/NoteEditModel.h
+    Source/dsp/NoteCapture.cpp
+    Source/dsp/NoteCapture.h
+    Source/dsp/HarmonyNoteTypes.h
     Source/ui/NFLookAndFeel.cpp
     Source/ui/NFLookAndFeel.h
     Source/ui/IntervalRail.cpp
     Source/ui/IntervalRail.h
     Source/ui/PitchTrace.cpp
     Source/ui/PitchTrace.h
+    Source/ui/HarmonyNoteEditor.cpp
+    Source/ui/HarmonyNoteEditor.h
     Source/ui/StereoMeter.cpp
     Source/ui/StereoMeter.h)
 
@@ -130,6 +137,8 @@ if(NF_BUILD_TESTS)
         Source/dsp/MusicalScale.cpp
         Source/dsp/GranularPitchShifter.cpp
         Source/dsp/HarmonyEngine.cpp
+        Source/dsp/NoteEditModel.cpp
+        Source/dsp/NoteCapture.cpp
         Source/PresetManager.cpp)
     target_include_directories(NFVocalHarmonizerTests PRIVATE Source)
     target_compile_definitions(NFVocalHarmonizerTests PRIVATE
@@ -148,7 +157,9 @@ if(NF_BUILD_TESTS)
         Source/dsp/YinPitchDetector.cpp
         Source/dsp/MusicalScale.cpp
         Source/dsp/GranularPitchShifter.cpp
-        Source/dsp/HarmonyEngine.cpp)
+        Source/dsp/HarmonyEngine.cpp
+        Source/dsp/NoteEditModel.cpp
+        Source/dsp/NoteCapture.cpp)
     target_include_directories(NFVocalHarmonizerVocalAudit PRIVATE Source)
     target_compile_definitions(NFVocalHarmonizerVocalAudit PRIVATE
         JUCE_WEB_BROWSER=0

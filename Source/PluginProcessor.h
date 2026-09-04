@@ -3,12 +3,15 @@
 #include "Parameters.h"
 #include "PresetManager.h"
 #include "dsp/HarmonyEngine.h"
+#include "dsp/NoteEditModel.h"
+#include "dsp/NoteCapture.h"
 
-class NFVocalHarmonizerAudioProcessor final : public juce::AudioProcessor
+class NFVocalHarmonizerAudioProcessor final : public juce::AudioProcessor,
+                                              private juce::Timer
 {
 public:
     NFVocalHarmonizerAudioProcessor();
-    ~NFVocalHarmonizerAudioProcessor() override = default;
+    ~NFVocalHarmonizerAudioProcessor() override;
     void prepareToPlay(double, int) override;
     void releaseResources() override;
     bool isBusesLayoutSupported(const BusesLayout&) const override;
@@ -30,20 +33,34 @@ public:
     void setStateInformation(const void*, int) override;
 
     void resetKeyAnalysis() { engine.resetKeyAnalysis(); }
+    void beginAnalyzeCapture();
+    void finalizeAnalyzeCapture();
+    bool isAnalyzeArmed() const noexcept { return capture.isArmed(); }
+
     nf::dsp::PitchEstimate getPitchEstimate() const { return engine.getPitchEstimate(); }
     nf::dsp::ScaleResult getDetectedScale() const { return engine.getDetectedScale(); }
     nf::dsp::MeterSnapshot getMeters() const { return engine.getMeters(); }
+    double getHostTimeSeconds() const noexcept { return hostTimeSec.load(std::memory_order_relaxed); }
+    bool isHostPlaying() const noexcept { return hostPlaying.load(std::memory_order_relaxed); }
+
     void captureSlot(bool slotA);
     void restoreSlot(bool slotA);
     void copySlot(bool fromA);
 
     juce::AudioProcessorValueTreeState apvts;
     PresetManager presets;
+    nf::notes::NoteEditModel noteModel;
 
 private:
+    void timerCallback() override;
     nf::dsp::HarmonySettings readSettings() const;
+    std::pair<int, nf::dsp::ScaleType> activeKeyScale() const;
+
     nf::dsp::HarmonyEngine engine;
+    nf::notes::NoteCapture capture;
     juce::ValueTree slotA { "SLOT_A" }, slotB { "SLOT_B" };
+    std::atomic<double> hostTimeSec { 0.0 };
+    std::atomic<bool> hostPlaying { false };
+    bool wasPlaying = false;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NFVocalHarmonizerAudioProcessor)
 };
-

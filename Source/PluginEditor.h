@@ -3,7 +3,7 @@
 #include "PluginProcessor.h"
 #include "ui/NFLookAndFeel.h"
 #include "ui/IntervalRail.h"
-#include "ui/PitchTrace.h"
+#include "ui/HarmonyNoteEditor.h"
 #include "ui/StereoMeter.h"
 
 class NFVocalHarmonizerAudioProcessorEditor final : public juce::AudioProcessorEditor,
@@ -15,8 +15,10 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
 
-    static constexpr int designWidth  = 1100;
-    static constexpr int designHeight = 734;
+    static constexpr int designWidth   = 1100;
+    static constexpr int designHeight  = 734;
+    static constexpr int defaultWidth  = 900;
+    static constexpr int defaultHeight = 601; // same aspect as design canvas
 
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -29,9 +31,28 @@ private:
         void paint(juce::Graphics&) override;
     };
 
+    class TitleHitZone final : public juce::Component
+    {
+    public:
+        explicit TitleHitZone(NFVocalHarmonizerAudioProcessorEditor& owner) : editor(owner)
+        {
+            setMouseCursor(juce::MouseCursor::PointingHandCursor);
+        }
+
+        void mouseUp(const juce::MouseEvent& e) override
+        {
+            if (e.mouseWasClicked())
+                editor.resetToDefaultSize();
+        }
+
+    private:
+        NFVocalHarmonizerAudioProcessorEditor& editor;
+    };
+
     void timerCallback() override;
     void configureKnob(juce::Slider&, const juce::String&, juce::Colour, int decimals, const juce::String& suffix);
     void layoutFixedCanvas();
+    void resetToDefaultSize();
     void refreshPresetList(const juce::String& select = {});
     void savePresetAsync();
     void switchAB(bool useA);
@@ -40,9 +61,10 @@ private:
     NFVocalHarmonizerAudioProcessor& audioProcessor;
     juce::ComponentBoundsConstrainer constrainer;
     FixedCanvas canvas;
+    TitleHitZone titleHitZone;
     NFLookAndFeel look;
     IntervalRail rail;
-    PitchTrace trace;
+    HarmonyNoteEditor noteEditor;
     StereoMeter inputMeter { "INPUT" }, outputMeter { "OUTPUT" };
 
     juce::Slider harmony, formant, humanize, width, mix;

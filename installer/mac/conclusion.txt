@@ -1,0 +1,6 @@
+Installation finished.
+
+Open Logic/LUNA (AU), Reaper (VST3) or Pro Tools (AAX) and load
+“NF Vocal Harmonizer” from NF Audio Tools.
+
+Thank you.

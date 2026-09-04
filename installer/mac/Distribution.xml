@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>NF Vocal Harmonizer</title>
+    <organization>com.nfaudiotools</organization>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <options customize="allow" require-scripts="false" rootVolumeOnly="true"/>
+    <welcome file="welcome.txt" mime-type="text/plain"/>
+    <conclusion file="conclusion.txt" mime-type="text/plain"/>
+    <choices-outline>
+        <line choice="vst3"/>
+        <line choice="au"/>
+        <line choice="aax"/>
+    </choices-outline>
+    <choice id="vst3" title="VST3" description="Install NF Vocal Harmonizer VST3" selected="true">
+        <pkg-ref id="com.nfaudiotools.nfvocalharmonizer.vst3"/>
+    </choice>
+    <choice id="au" title="AU" description="Install NF Vocal Harmonizer Audio Unit" selected="true">
+        <pkg-ref id="com.nfaudiotools.nfvocalharmonizer.au"/>
+    </choice>
+    <choice id="aax" title="AAX" description="Install NF Vocal Harmonizer AAX for Pro Tools" selected="true">
+        <pkg-ref id="com.nfaudiotools.nfvocalharmonizer.aax"/>
+    </choice>
+    <pkg-ref id="com.nfaudiotools.nfvocalharmonizer.vst3" version="1.0.0">NFVocalHarmonizer-VST3.pkg</pkg-ref>
+    <pkg-ref id="com.nfaudiotools.nfvocalharmonizer.au" version="1.0.0">NFVocalHarmonizer-AU.pkg</pkg-ref>
+    <pkg-ref id="com.nfaudiotools.nfvocalharmonizer.aax" version="1.0.0">NFVocalHarmonizer-AAX.pkg</pkg-ref>
+</installer-gui-script>
