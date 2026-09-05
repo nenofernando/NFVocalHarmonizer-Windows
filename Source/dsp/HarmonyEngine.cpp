@@ -141,9 +141,8 @@ void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySetti
         localInR = juce::jmax(localInR, std::abs(inputR));
 
         const double sampleTime = hostTimeSec + static_cast<double>(i) * invSr;
-        float editedTargetMidi = 0.0f;
-        const bool hasManualEdit = offsets != nullptr
-                                   && offsets->tryGetTargetMidi(sampleTime, editedTargetMidi);
+        const float desiredOffset = offsets != nullptr ? offsets->offsetAt(sampleTime) : 0.0f;
+        manualOffsetSmooth.setTargetValue(desiredOffset);
 
         if (pitchDetector.pushSample(mono))
         {
@@ -266,12 +265,10 @@ void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySetti
                     }
                 }
 
-                // Automatic diatonic target, or absolute pencil/SEL lock when the note is edited.
-                const float targetMidi = hasManualEdit
-                    ? editedTargetMidi
-                    : MusicalScale::targetMidi(estimate.midiNote, s.intervalChoice,
-                                               activeRoot, activeScale);
-                ratioSmooth.setTargetValue(std::pow(2.0f, (targetMidi - estimate.midiNote) / 12.0f));
+                // Automatic diatonic target only. Manual offset is applied sample-by-sample below.
+                const auto autoTarget = MusicalScale::targetMidi(estimate.midiNote, s.intervalChoice,
+                                                                  activeRoot, activeScale);
+                ratioSmooth.setTargetValue(std::pow(2.0f, (autoTarget - estimate.midiNote) / 12.0f));
                 voicedSmooth.setTargetValue(1.0f);
             }
             else
@@ -279,17 +276,13 @@ void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySetti
                 voicedSmooth.setTargetValue(0.0f);
             }
         }
-        else if (hasManualEdit && pitchVoiced.load(std::memory_order_relaxed))
-        {
-            // Between pitch hops, LINE targets still move with host time — retarget ratio.
-            const float voiceMidiNow = pitchMidi.load(std::memory_order_relaxed);
-            if (voiceMidiNow > 1.0f)
-                ratioSmooth.setTargetValue(std::pow(2.0f, (editedTargetMidi - voiceMidiNow) / 12.0f));
-        }
+
+        const auto offsetSemis = manualOffsetSmooth.getNextValue();
+        const auto offsetRatio = std::pow(2.0f, offsetSemis / 12.0f);
 
         driftL += 0.00035f * (nextRandomBipolar() - driftL);
         driftR += 0.00029f * (nextRandomBipolar() - driftR);
-        const auto ratio = ratioSmooth.getNextValue();
+        const auto ratio = ratioSmooth.getNextValue() * offsetRatio;
         const auto centsAmount = 7.0f * human * width;
         const auto ratioL = ratio * std::pow(2.0f, driftL * centsAmount / 1200.0f);
         const auto ratioR = ratio * std::pow(2.0f, driftR * centsAmount / 1200.0f);

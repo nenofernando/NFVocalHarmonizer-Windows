@@ -18,8 +18,7 @@ inline constexpr auto power     = "power";
 
 inline juce::StringArray intervalNames()
 {
-    // Index 4 = Tônica / VOICE (unison) — default open position at rail centre.
-    return { "-8ve", "-6th", "-5th", "-3rd", "VOICE", "+3rd", "+5th", "+6th", "+8ve" };
+    return { "-8ve", "-6th", "-5th", "-3rd", "+3rd", "+5th", "+6th", "+8ve" };
 }
 
 inline juce::StringArray keyNames()
@@ -40,7 +39,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     using R = juce::NormalisableRange<float>;
 
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> p;
-    p.push_back(std::make_unique<APC>(juce::ParameterID { interval, 2 }, "Interval", intervalNames(), 4));
+    p.push_back(std::make_unique<APC>(juce::ParameterID { interval, 4 }, "Interval", intervalNames(), 4));
     p.push_back(std::make_unique<APF>(juce::ParameterID { harmony, 1 }, "Harmony", R { 0.0f, 100.0f, 0.1f }, 70.0f, "%"));
     p.push_back(std::make_unique<APF>(juce::ParameterID { formant, 1 }, "Formant", R { -12.0f, 12.0f, 0.01f }, 0.0f, " st"));
     p.push_back(std::make_unique<APF>(juce::ParameterID { humanize, 1 }, "Humanize", R { 0.0f, 100.0f, 0.1f }, 35.0f, "%"));

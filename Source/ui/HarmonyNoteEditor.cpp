@@ -471,10 +471,6 @@ float HarmonyNoteEditor::amplitudeAtTime(double timeSec, const nf::notes::Harmon
 
 float HarmonyNoteEditor::pitchMidiAtTime(double timeSec, const nf::notes::HarmonyNote& note, bool harmonyLane) const
 {
-    // Edited harmony notes lock to the drawn absolute pitch (flat / slope), not voice vibrato.
-    if (harmonyLane && note.isEdited())
-        return liveAutoHarmonyMidi(note) + note.offsetAt(timeSec);
-
     const float baseHarmony = harmonyDisplayMidi(note);
     const float baseVoice = note.voiceMidi;
     const float intervalShift = baseHarmony - baseVoice;

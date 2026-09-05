@@ -8,34 +8,15 @@ struct RailGeometry
     float cx = 0.0f;
     float top = 20.0f;
     float bottom = 0.0f;
-    float step = 32.0f;
+    float step = 1.0f;
 
     static RailGeometry fromBounds(juce::Rectangle<float> r)
     {
         RailGeometry g;
         g.cx = r.getCentreX();
-
-        // 9 nodes (rows 0..8): +8ve … VOICE … -8ve. Never clip the octave ends.
-        // Prefer ~32px pitch when height allows; shrink evenly when the rail is short.
-        constexpr float preferredStep = 32.0f;
-        constexpr float edgePad = 14.0f;
-        constexpr float spanRows = 8.0f;
-
-        const float usable = juce::jmax(8.0f, r.getHeight() - edgePad * 2.0f);
-        const float fitStep = usable / spanRows;
-
-        if (fitStep >= preferredStep)
-        {
-            g.step = preferredStep;
-            const float span = g.step * spanRows;
-            g.top = (r.getHeight() - span) * 0.5f;
-        }
-        else
-        {
-            g.step = fitStep;
-            g.top = edgePad;
-        }
-        g.bottom = g.top + g.step * spanRows;
+        g.top = 20.0f;
+        g.bottom = r.getHeight() - 20.0f;
+        g.step = (g.bottom - g.top) / 8.0f;
         return g;
     }
 
@@ -63,26 +44,26 @@ void IntervalRail::parameterChanged(const juce::String&, float v)
 
 int IntervalRail::choiceForRow(int row) const
 {
-    // Top→bottom: +8ve … VOICE/tônica … -8ve  (indices match Parameters::intervalNames)
-    static constexpr int map[9] { 8, 7, 6, 5, 4, 3, 2, 1, 0 };
+    static constexpr int map[9] { 7, 6, 5, 4, -1, 3, 2, 1, 0 };
     return map[juce::jlimit(0, 8, row)];
 }
 
 int IntervalRail::hitTestIntervalCircle(juce::Point<float> pos) const
 {
     const auto g = RailGeometry::fromBounds(getLocalBounds().toFloat());
+    // Hit radius matches the drawn interval disc (~8 px) with a small padding for usability.
     constexpr float hitRadius = 11.0f;
-    constexpr float voiceHitRadius = 16.0f;
 
     for (int row = 0; row < 9; ++row)
     {
         const int choice = choiceForRow(row);
-        const bool voice = (choice == 4);
+        if (choice < 0)
+            continue; // VOICE node is not selectable
+
         const float y = g.rowY(row);
         const float dx = pos.x - g.cx;
         const float dy = pos.y - y;
-        const float radius = voice ? voiceHitRadius : hitRadius;
-        if ((dx * dx + dy * dy) <= radius * radius)
+        if ((dx * dx + dy * dy) <= hitRadius * hitRadius)
             return choice;
     }
     return -1;
@@ -102,41 +83,39 @@ void IntervalRail::paint(juce::Graphics& g)
     {
         const float y = geom.rowY(row);
         const int choice = choiceForRow(row);
-        const bool voice = (choice == 4); // Tônica central (VOICE / unison)
+        const bool voice = choice < 0;
         const bool active = choice == selected.load();
         const auto colour = voice ? juce::Colour(0xff38ddff)
                                   : active ? juce::Colour(0xffaa4df4) : juce::Colour(0xffd2d7dd);
         if (voice)
         {
-            // Slightly tighter glow so neighbours keep a clean gap.
-            g.setColour(colour.withAlpha(active ? 0.85f : 0.65f));
-            g.fillRoundedRectangle(cx - 96.0f, y - 1.0f, 192.0f, 2.0f, 1.0f);
-            g.setColour(colour.withAlpha(active ? 0.32f : 0.22f));
-            g.fillEllipse(cx - 20.0f, y - 20.0f, 40.0f, 40.0f);
+            g.setColour(colour.withAlpha(0.65f));
+            g.fillRoundedRectangle(cx - 102.0f, y - 1.0f, 204.0f, 2.0f, 1.0f);
+            g.setColour(colour.withAlpha(0.25f));
+            g.fillEllipse(cx - 23.0f, y - 23.0f, 46.0f, 46.0f);
             g.setColour(juce::Colour(0xff10151d));
-            g.fillEllipse(cx - 15.0f, y - 15.0f, 30.0f, 30.0f);
+            g.fillEllipse(cx - 16.0f, y - 16.0f, 32.0f, 32.0f);
             g.setColour(colour);
-            g.drawEllipse(cx - 15.0f, y - 15.0f, 30.0f, 30.0f, active ? 3.5f : 3.0f);
+            g.drawEllipse(cx - 16.0f, y - 16.0f, 32.0f, 32.0f, 3.0f);
             g.setFont(juce::Font(juce::FontOptions(17.0f, juce::Font::bold)));
             g.drawFittedText(labels[row],
-                             juce::Rectangle<int>(static_cast<int>(cx - 160), static_cast<int>(y - 12), 100, 24),
+                             juce::Rectangle<int>(static_cast<int>(cx - 165), static_cast<int>(y - 12), 95, 24),
                              juce::Justification::centredRight, 1);
         }
         else
         {
             if (active)
             {
-                g.setColour(colour.withAlpha(0.20f));
-                g.fillEllipse(cx - 13.0f, y - 13.0f, 26.0f, 26.0f);
+                g.setColour(colour.withAlpha(0.22f));
+                g.fillEllipse(cx - 15.0f, y - 15.0f, 30.0f, 30.0f);
             }
             g.setColour(juce::Colour(0xff151a21));
             g.fillEllipse(cx - 8.0f, y - 8.0f, 16.0f, 16.0f);
             g.setColour(colour);
             g.drawEllipse(cx - 8.0f, y - 8.0f, 16.0f, 16.0f, active ? 3.0f : 1.6f);
             g.setFont(juce::Font(juce::FontOptions(16.0f, active ? juce::Font::bold : juce::Font::plain)));
-            // Labels share one left edge so the column reads aligned.
             g.drawFittedText(labels[row],
-                             juce::Rectangle<int>(static_cast<int>(cx + 26), static_cast<int>(y - 11), 88, 22),
+                             juce::Rectangle<int>(static_cast<int>(cx + 27), static_cast<int>(y - 11), 85, 23),
                              juce::Justification::centredLeft, 1);
         }
     }

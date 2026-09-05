@@ -417,11 +417,8 @@ void noteOffsetSessionAndUndoTest()
 
     model.setManualOffset("n1", 1.0f, &model.getUndoManager());
     check(std::abs(model.findNote("n1")->manualOffsetSemitones - 1.0f) < 1.0e-5f, "Manual offset applied");
-    // Offset table now publishes ABSOLUTE harmony MIDI (auto 64 + offset 1 = 65).
-    check(std::abs(model.getOffsetTable().offsetAt(1.2) - 65.0f) < 1.0e-5f, "Offset table published absolute target");
+    check(std::abs(model.getOffsetTable().offsetAt(1.2) - 1.0f) < 1.0e-5f, "Offset table published for host time");
     check(std::abs(model.getOffsetTable().offsetAt(0.2)) < 1.0e-5f, "No offset outside note window");
-    check(model.getOffsetTable().hasTargetAt(1.2), "Edit region reports target");
-    check(! model.getOffsetTable().hasTargetAt(0.2), "Outside note has no target");
 
     model.getUndoManager().undo();
     check(std::abs(model.findNote("n1")->manualOffsetSemitones) < 1.0e-5f, "Undo restores auto offset");
@@ -438,7 +435,7 @@ void noteOffsetSessionAndUndoTest()
     check(tree.hasType("HARMONY_NOTE_EDITS"), "Edits use dedicated session tree type");
 }
 
-void pencilAbsoluteLockTest()
+void pencilRelativeOffsetTest()
 {
     nf::notes::NoteEditModel model;
     nf::notes::HarmonyNote n;
@@ -450,20 +447,16 @@ void pencilAbsoluteLockTest()
     n.confidence = 0.9f;
     model.setNotes({ n });
 
-    // FLAT locks to absolute MIDI 67 (G4) regardless of vibrato-following auto path.
     check(model.applyFlatPencilAbsolute("p1", 67.0f, 64.0f, &model.getUndoManager()), "Flat pencil commits");
-    check(std::abs(model.findNote("p1")->manualOffsetSemitones - 3.0f) < 1.0e-5f, "Flat stores offset vs auto base");
-    check(std::abs(model.getOffsetTable().offsetAt(0.5) - 67.0f) < 1.0e-5f, "Flat publishes absolute 67");
+    check(std::abs(model.findNote("p1")->manualOffsetSemitones - 3.0f) < 1.0e-5f, "Flat stores relative offset");
+    check(std::abs(model.getOffsetTable().offsetAt(0.5) - 3.0f) < 1.0e-5f, "Flat publishes relative offset");
     check(! model.findNote("p1")->hasPitchCurve(), "Flat clears pitch curve");
 
-    // LINE draws a glide 65 → 69 across the note.
     check(model.applySlopePencilAbsolute("p1", 0.2, 65.0f, 0.8, 69.0f, 64.0f, &model.getUndoManager()),
           "Slope pencil commits");
     check(model.findNote("p1")->hasPitchCurve(), "Slope stores pitch curve");
-    check(std::abs(model.getOffsetTable().offsetAt(0.2) - 65.0f) < 0.05f, "Slope start absolute");
-    check(std::abs(model.getOffsetTable().offsetAt(0.8) - 69.0f) < 0.05f, "Slope end absolute");
-    check(std::abs(model.getOffsetTable().offsetAt(0.05) - 65.0f) < 0.05f, "Slope holds start before draw");
-    check(std::abs(model.getOffsetTable().offsetAt(0.95) - 69.0f) < 0.05f, "Slope holds end after draw");
+    check(std::abs(model.getOffsetTable().offsetAt(0.2) - 1.0f) < 0.05f, "Slope start relative offset");
+    check(std::abs(model.getOffsetTable().offsetAt(0.8) - 5.0f) < 0.05f, "Slope end relative offset");
 }
 
 void snapModesTest()
@@ -710,8 +703,7 @@ void noteSelectionDeleteUndoTest()
     }
     model.setNotes(notes);
     check(model.getNotes().size() == 4, "Seed four analysed notes");
-    // n1: auto 65 + offset 1.5 → absolute 66.5
-    check(std::abs(model.getOffsetTable().offsetAt(1.2) - 66.5f) < 1.0e-5f, "Edited note publishes absolute target before delete");
+    check(std::abs(model.getOffsetTable().offsetAt(1.2) - 1.5f) < 1.0e-5f, "Edited note publishes offset before delete");
 
     // Single delete.
     model.removeNotes({ "n0" }, &model.getUndoManager());
@@ -728,7 +720,7 @@ void noteSelectionDeleteUndoTest()
     check(model.getNotes().size() == 3 && model.findNote("n1") != nullptr && model.findNote("n2") != nullptr,
           "One undo restores entire multi-delete");
     check(std::abs(model.findNote("n1")->manualOffsetSemitones - 1.5f) < 1.0e-5f, "Undo restores manual correction with note");
-    check(std::abs(model.getOffsetTable().offsetAt(1.2) - 66.5f) < 1.0e-5f, "Offset table republished after undo");
+    check(std::abs(model.getOffsetTable().offsetAt(1.2) - 1.5f) < 1.0e-5f, "Offset table republished after undo");
 
     model.getUndoManager().redo();
     check(model.getNotes().size() == 1, "Redo reapplies multi-delete as one operation");
@@ -1052,7 +1044,7 @@ int main()
     engineAutomationAudibleTest();
     noteCaptureAndSegmentationTest();
     noteOffsetSessionAndUndoTest();
-    pencilAbsoluteLockTest();
+    pencilRelativeOffsetTest();
     snapModesTest();
     manualOffsetAudioTransitionTest();
     transportLoopAndBlockSizeTest();

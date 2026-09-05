@@ -78,8 +78,7 @@ public:
     {
         double startSec = 0.0;
         double endSec = 0.0;
-        // Absolute harmony MIDI targets (legacy field names kept for binary layout clarity).
-        float offsetStart = 0.0f;
+        float offsetStart = 0.0f; // relative to live auto harmony (semitones)
         float offsetEnd = 0.0f;
     };
 
@@ -99,7 +98,6 @@ public:
             if (! note.isEdited())
                 continue;
 
-            // Audio thread locks to ABSOLUTE harmony MIDI (not vibrato-following auto+offset).
             const double noteStart = note.startSec;
             const double noteEnd = note.startSec + juce::jmax(0.02, note.durationSec);
 
@@ -120,11 +118,8 @@ public:
                         break;
                     const auto& a = pts[i - 1];
                     const auto& b = pts[i];
-                    dest[static_cast<size_t>(n)] = {
-                        a.timeSec, b.timeSec,
-                        note.autoHarmonyMidi + a.offsetSemitones,
-                        note.autoHarmonyMidi + b.offsetSemitones
-                    };
+                    dest[static_cast<size_t>(n)] = { a.timeSec, b.timeSec,
+                                                     a.offsetSemitones, b.offsetSemitones };
                     ++n;
                 }
             }
@@ -132,8 +127,8 @@ public:
             {
                 if (n >= maxRegions)
                     break;
-                const float absMidi = note.editedHarmonyMidi();
-                dest[static_cast<size_t>(n)] = { noteStart, noteEnd, absMidi, absMidi };
+                dest[static_cast<size_t>(n)] = { noteStart, noteEnd,
+                                                 note.manualOffsetSemitones, note.manualOffsetSemitones };
                 ++n;
             }
         }
@@ -141,15 +136,7 @@ public:
         writeIndex.store(next, std::memory_order_release);
     }
 
-    /** True when host time falls inside a manually edited harmony region. */
-    bool hasTargetAt(double timeSec) const noexcept
-    {
-        float ignored = 0.0f;
-        return tryGetTargetMidi(timeSec, ignored);
-    }
-
-    /** Absolute harmony MIDI target for edited regions. Returns false outside edits. */
-    bool tryGetTargetMidi(double timeSec, float& outMidi) const noexcept
+    float offsetAt(double timeSec) const noexcept
     {
         const int idx = writeIndex.load(std::memory_order_acquire);
         const int n = counts[idx].load(std::memory_order_relaxed);
@@ -161,23 +148,12 @@ public:
             {
                 const double span = juce::jmax(1.0e-9, r.endSec - r.startSec);
                 const float t = static_cast<float>((timeSec - r.startSec) / span);
-                outMidi = r.offsetStart + t * (r.offsetEnd - r.offsetStart);
-                return true;
+                return r.offsetStart + t * (r.offsetEnd - r.offsetStart);
             }
             if (timeSec == r.endSec)
-            {
-                outMidi = r.offsetEnd;
-                return true;
-            }
+                return r.offsetEnd;
         }
-        return false;
-    }
-
-    /** Absolute harmony MIDI, or 0 when no edit covers this time (legacy test helper). */
-    float offsetAt(double timeSec) const noexcept
-    {
-        float midi = 0.0f;
-        return tryGetTargetMidi(timeSec, midi) ? midi : 0.0f;
+        return 0.0f;
     }
 
 private:

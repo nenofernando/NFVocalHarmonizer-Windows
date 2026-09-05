@@ -102,9 +102,8 @@ std::vector<int> MusicalScale::degrees(ScaleType type)
 
 int MusicalScale::intervalChoiceToDegreeOffset(int choiceIndex)
 {
-    // -8ve -6th -5th -3rd VOICE/tônica +3rd +5th +6th +8ve
-    static constexpr std::array<int, 9> offsets { -7, -5, -4, -2, 0, 2, 4, 5, 7 };
-    return offsets[static_cast<size_t>(juce::jlimit(0, 8, choiceIndex))];
+    static constexpr std::array<int, 8> offsets { -7, -5, -4, -2, 2, 4, 5, 7 };
+    return offsets[static_cast<size_t>(juce::jlimit(0, 7, choiceIndex))];
 }
 
 float MusicalScale::targetMidi(float inputMidi, int intervalChoice, int root, ScaleType type)
@@ -114,8 +113,8 @@ float MusicalScale::targetMidi(float inputMidi, int intervalChoice, int root, Sc
 
     if (type == ScaleType::chromatic)
     {
-        static constexpr std::array<int, 9> semitones { -12, -9, -7, -4, 0, 4, 7, 9, 12 };
-        return inputMidi + static_cast<float>(semitones[static_cast<size_t>(juce::jlimit(0, 8, intervalChoice))]);
+        static constexpr std::array<int, 8> semitones { -12, -9, -7, -4, 4, 7, 9, 12 };
+        return inputMidi + static_cast<float>(semitones[static_cast<size_t>(juce::jlimit(0, 7, intervalChoice))]);
     }
 
     const auto scale = degrees(type);
