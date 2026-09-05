@@ -13,6 +13,8 @@ public:
 
     void clear();
     void setNotes(std::vector<HarmonyNote> notes);
+    /** Append new analysis notes without replacing existing ones (skips time overlaps). */
+    size_t appendNotes(std::vector<HarmonyNote> incoming);
     const std::vector<HarmonyNote>& getNotes() const noexcept { return notes; }
     HarmonyNote* findNote(const juce::String& id);
     const HarmonyNote* findNote(const juce::String& id) const;
@@ -26,6 +28,16 @@ public:
 
     bool setManualOffset(const juce::String& id, float offsetSemitones, juce::UndoManager* undo);
     bool resetManualOffset(const juce::String& id, juce::UndoManager* undo);
+
+    /** Flat pencil: constant offset across the note (clears pitch curve). */
+    bool applyFlatPencil(const juce::String& id, float offsetSemitones, juce::UndoManager* undo);
+    /** Slope pencil: straight line between two time/offset points. */
+    bool applySlopePencil(const juce::String& id,
+                          double t0, float offset0,
+                          double t1, float offset1,
+                          juce::UndoManager* undo);
+    /** Scissors: split note at absolute time. Returns new right-hand note id, or {}. */
+    juce::String splitNoteAt(const juce::String& id, double cutTimeSec, juce::UndoManager* undo);
 
     /** Remove notes from the edit map only (DSP falls back to auto harmony). One undo step. */
     bool removeNotes(const std::vector<juce::String>& ids, juce::UndoManager* undo);
@@ -51,6 +63,32 @@ public:
         NoteEditModel& model;
         juce::String id;
         float previous = 0.0f, next = 0.0f;
+    };
+
+    class NoteMutateAction final : public juce::UndoableAction
+    {
+    public:
+        NoteMutateAction(NoteEditModel& owner, HarmonyNote before, HarmonyNote after);
+        bool perform() override;
+        bool undo() override;
+        int getSizeInUnits() override { return 1; }
+
+    private:
+        NoteEditModel& model;
+        HarmonyNote previous, next;
+    };
+
+    class SplitNoteAction final : public juce::UndoableAction
+    {
+    public:
+        SplitNoteAction(NoteEditModel& owner, HarmonyNote original, HarmonyNote left, HarmonyNote right);
+        bool perform() override;
+        bool undo() override;
+        int getSizeInUnits() override { return 1; }
+
+    private:
+        NoteEditModel& model;
+        HarmonyNote originalNote, leftNote, rightNote;
     };
 
     class DeleteNotesAction final : public juce::UndoableAction

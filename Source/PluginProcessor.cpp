@@ -211,51 +211,101 @@ double NFVocalHarmonizerAudioProcessor::takePendingEditorCursorSeconds() noexcep
     return pendingEditorCursorSeconds.exchange(-1.0, std::memory_order_acq_rel);
 }
 
-void NFVocalHarmonizerAudioProcessor::beginAnalyzeCapture()
+void NFVocalHarmonizerAudioProcessor::startAnalysisCapture()
 {
-    markAnalysisStartFromCurrentTransport();
+    if (analysisState.load(std::memory_order_acquire) == AnalysisState::capturing)
+        return;
 
-    noteModel.clear();
+    // Scratch only — never clear the published note map or frozen viz.
     capture.clearRaw();
     capture.ring().reset();
     capture.setArmed(true);
     engine.resetKeyAnalysis();
 
-    const bool playing = isHostPlaying();
-    analysisState.store(analysisStateForBegin(playing), std::memory_order_relaxed);
-    wasPlaying = playing;
+    // Anchor timeline only on the first capture; later ANALYZE passes append forward.
+    if (! hasPublishedAnalysis())
+        markAnalysisStartFromCurrentTransport();
+
+    finishAnalysisRequested.store(false, std::memory_order_release);
+    analysisState.store(AnalysisState::capturing, std::memory_order_release);
+    wasPlaying = isHostPlaying();
 }
 
-void NFVocalHarmonizerAudioProcessor::finalizeAnalyzeCapture()
+void NFVocalHarmonizerAudioProcessor::requestFinishAnalysis() noexcept
 {
+    if (analysisState.load(std::memory_order_acquire) != AnalysisState::capturing)
+        return;
+    finishAnalysisRequested.store(true, std::memory_order_release);
+}
+
+void NFVocalHarmonizerAudioProcessor::finishAnalysisCapture()
+{
+    if (analysisState.load(std::memory_order_acquire) != AnalysisState::capturing)
+        return;
+
     capture.setArmed(false);
     capture.drainRing();
+    finishAnalysisRequested.store(false, std::memory_order_relaxed);
+
     const auto settings = readSettings();
     const auto key = activeKeyScale();
     auto notes = capture.buildNotes(settings.intervalChoice, key.first, key.second);
     const bool hasNotes = ! notes.empty();
-    noteModel.setNotes(std::move(notes));
-    analysisState.store(analysisStateForFinalize(hasNotes), std::memory_order_relaxed);
+    const bool hadPublished = hasPublishedAnalysis();
+
+    if (hasNotes)
+    {
+        const bool appending = hadPublished && ! noteModel.getNotes().empty();
+        size_t added = 0;
+        if (appending)
+            added = noteModel.appendNotes(std::move(notes));
+        else
+        {
+            noteModel.setNotes(std::move(notes));
+            added = noteModel.getNotes().size();
+        }
+
+        // Merge viz hops forward — never erase earlier capture waveforms.
+        const auto& incoming = capture.getRawSamples();
+        if (publishedVizSamples.empty())
+        {
+            publishedVizSamples = incoming;
+        }
+        else if (! incoming.empty())
+        {
+            const double protectEnd = publishedVizSamples.back().timeSec;
+            for (const auto& s : incoming)
+            {
+                if (s.timeSec > protectEnd + 0.01)
+                    publishedVizSamples.push_back(s);
+            }
+        }
+
+        if (added > 0 || ! appending)
+            publishedAnalysisRevision.fetch_add(1, std::memory_order_release);
+
+        analysisState.store(AnalysisState::ready, std::memory_order_release);
+    }
+    else
+    {
+        // Keep previous publishedVizSamples + map.
+        analysisState.store(analysisStateAfterFinish(false, hadPublished),
+                            std::memory_order_release);
+    }
 }
 
 void NFVocalHarmonizerAudioProcessor::timerCallback()
 {
-    const bool playing = isHostPlaying();
-    const auto state = analysisState.load(std::memory_order_relaxed);
+    wasPlaying = isHostPlaying();
 
-    if (capture.isArmed())
+    if (finishAnalysisRequested.load(std::memory_order_acquire)
+        && analysisState.load(std::memory_order_acquire) == AnalysisState::capturing)
     {
-        capture.drainRing();
-
-        const auto next = analysisStateAfterArmedSeesPlay(state, playing);
-        if (next != state)
-            analysisState.store(next, std::memory_order_relaxed);
-
-        if (analysisShouldFinalizeOnStop(wasPlaying, playing))
-            finalizeAnalyzeCapture();
+        finishAnalysisCapture();
     }
 
-    wasPlaying = playing;
+    if (analysisState.load(std::memory_order_acquire) == AnalysisState::capturing)
+        capture.drainRing();
 }
 
 void NFVocalHarmonizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -267,11 +317,25 @@ void NFVocalHarmonizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
     for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
         buffer.clear(ch, 0, buffer.getNumSamples());
 
-    // DSP always uses the true host clock — never the parked GUI cursor.
     const auto transport = getTransportSnapshot();
     const double sr = juce::jmax(1.0, transport.sampleRate);
     const double timeSec = static_cast<double>(transport.currentHostSample) / sr;
     const bool playing = transport.isPlaying;
+
+    // Play→Stop while capturing: signal finish only (no finalize on audio thread).
+    {
+        const bool was = wasHostPlayingAudio.exchange(playing, std::memory_order_acq_rel);
+        if (was && ! playing
+            && analysisState.load(std::memory_order_acquire) == AnalysisState::capturing)
+        {
+            finishAnalysisRequested.store(true, std::memory_order_release);
+        }
+    }
+
+    const auto state = analysisState.load(std::memory_order_acquire);
+    const bool shouldCapture = (state == AnalysisState::capturing);
+    if (shouldCapture)
+        analysisCaptureWriteCount.fetch_add(1, std::memory_order_relaxed);
 
     if (apvts.getRawParameterValue(nf::params::power)->load() < 0.5f)
     {
@@ -280,7 +344,8 @@ void NFVocalHarmonizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
     }
 
     engine.process(buffer, readSettings(), timeSec, &noteModel.getOffsetTable(),
-                   &capture.ring(), capture.isArmed() && playing);
+                   shouldCapture ? &capture.ring() : nullptr,
+                   shouldCapture);
 }
 
 void NFVocalHarmonizerAudioProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -299,13 +364,17 @@ juce::AudioProcessorEditor* NFVocalHarmonizerAudioProcessor::createEditor()
 void NFVocalHarmonizerAudioProcessor::getStateInformation(juce::MemoryBlock& dest)
 {
     auto root = apvts.copyState();
-    root.setProperty("schemaVersion", 4, nullptr);
+    root.setProperty("schemaVersion", 5, nullptr);
     root.addChild(slotA.createCopy(), -1, nullptr);
     root.addChild(slotB.createCopy(), -1, nullptr);
     root.addChild(noteModel.toValueTree(), -1, nullptr);
-    if (analysisState.load(std::memory_order_relaxed) == AnalysisState::completed
-        && ! noteModel.getNotes().empty())
+    if (hasPublishedAnalysis() && ! noteModel.getNotes().empty())
+    {
         root.setProperty("analysisCompleted", true, nullptr);
+        root.setProperty("publishedAnalysisRevision",
+                         static_cast<juce::int64>(publishedAnalysisRevision.load(std::memory_order_relaxed)),
+                         nullptr);
+    }
     root.setProperty("editorCursorSeconds", getEditorCursorSecondsForState(), nullptr);
     root.setProperty("analysisStartHostSample",
                      static_cast<juce::int64>(transportAnalysisStartSample.load(std::memory_order_relaxed)),
@@ -329,12 +398,30 @@ void NFVocalHarmonizerAudioProcessor::setStateInformation(const void* data, int 
         noteModel.fromValueTree(edits);
         root.removeChild(edits, nullptr);
     }
-    if (static_cast<bool>(root.getProperty("analysisCompleted", false))
+
+    finishAnalysisRequested.store(false, std::memory_order_relaxed);
+    capture.setArmed(false);
+    if ((static_cast<bool>(root.getProperty("analysisCompleted", false))
+         || static_cast<juce::int64>(root.getProperty("publishedAnalysisRevision", 0)) > 0)
         && ! noteModel.getNotes().empty())
-        analysisState.store(AnalysisState::completed, std::memory_order_relaxed);
-    else if (noteModel.getNotes().empty())
-        analysisState.store(AnalysisState::idle, std::memory_order_relaxed);
+    {
+        const auto rev = static_cast<uint64_t>(
+            static_cast<juce::int64>(root.getProperty("publishedAnalysisRevision", 1)));
+        publishedAnalysisRevision.store(juce::jmax<uint64_t>(1, rev), std::memory_order_relaxed);
+        analysisState.store(AnalysisState::ready, std::memory_order_release);
+    }
+    else if (! noteModel.getNotes().empty())
+    {
+        publishedAnalysisRevision.store(1, std::memory_order_relaxed);
+        analysisState.store(AnalysisState::ready, std::memory_order_release);
+    }
+    else
+    {
+        publishedAnalysisRevision.store(0, std::memory_order_relaxed);
+        analysisState.store(AnalysisState::empty, std::memory_order_release);
+    }
     root.removeProperty("analysisCompleted", nullptr);
+    root.removeProperty("publishedAnalysisRevision", nullptr);
 
     const double cursorSeconds = static_cast<double>(root.getProperty("editorCursorSeconds", 0.0));
     editorCursorSecondsForState.store(cursorSeconds, std::memory_order_relaxed);

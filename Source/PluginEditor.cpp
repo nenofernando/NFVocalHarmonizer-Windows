@@ -51,7 +51,8 @@ void NFVocalHarmonizerAudioProcessorEditor::FixedCanvas::paint(juce::Graphics& g
 }
 
 NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFVocalHarmonizerAudioProcessor& p)
-    : AudioProcessorEditor(&p), audioProcessor(p), titleHitZone(*this), rail(p.apvts), noteEditor(p)
+    : AudioProcessorEditor(&p), audioProcessor(p), titleHitZone(*this), editorExpandTab(*this),
+      rail(p.apvts), noteEditor(p)
 {
     setLookAndFeel(&look);
 
@@ -61,6 +62,7 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     setConstrainer(&constrainer);
     setResizable(true, true);
     setSize(defaultWidth, defaultHeight);
+    setWantsKeyboardFocus(true);
 
     addAndMakeVisible(canvas);
     canvas.setInterceptsMouseClicks(false, true);
@@ -69,15 +71,15 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
 
     titleLabel.setText("NF Vocal Harmonizer", juce::dontSendNotification);
     titleLabel.setJustificationType(juce::Justification::centred);
-    titleLabel.setColour(juce::Label::textColourId, juce::Colour(0xffeceff2));
+    titleLabel.setColour(juce::Label::textColourId, juce::Colour(0xfff2f4f6));
     titleLabel.setFont(juce::Font(juce::FontOptions(26.0f, juce::Font::bold)));
     titleLabel.setInterceptsMouseClicks(false, false);
     canvas.addAndMakeVisible(titleLabel);
 
     subtitleLabel.setText("INTELLIGENT VOCAL HARMONY", juce::dontSendNotification);
     subtitleLabel.setJustificationType(juce::Justification::centred);
-    subtitleLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb7bec7));
-    subtitleLabel.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
+    subtitleLabel.setColour(juce::Label::textColourId, juce::Colour(0xffc5ccd4));
+    subtitleLabel.setFont(juce::Font(juce::FontOptions(12.5f, juce::Font::plain)));
     subtitleLabel.setInterceptsMouseClicks(false, false);
     canvas.addAndMakeVisible(subtitleLabel);
 
@@ -89,6 +91,7 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
 
     for (juce::Component* c : { static_cast<juce::Component*>(&rail),
                                 static_cast<juce::Component*>(&noteEditor),
+                                static_cast<juce::Component*>(&editorExpandTab),
                                 static_cast<juce::Component*>(&inputMeter),
                                 static_cast<juce::Component*>(&outputMeter),
                                 static_cast<juce::Component*>(&harmony),
@@ -106,7 +109,10 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     keyBox.addItemList(nf::params::keyNames(), 1);
     scaleBox.addItemList(nf::params::scaleNames(), 1);
     for (auto* c : { &keyBox, &scaleBox, &presetBox })
+    {
+        c->setWantsKeyboardFocus(false);
         canvas.addAndMakeVisible(c);
+    }
 
     for (juce::Component* c : { static_cast<juce::Component*>(&autoKeyButton),
                                 static_cast<juce::Component*>(&analyzeButton),
@@ -119,8 +125,8 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
                                 static_cast<juce::Component*>(&copyButton),
                                 static_cast<juce::Component*>(&saveButton),
                                 static_cast<juce::Component*>(&menuButton),
-                                static_cast<juce::Component*>(&zoomOutButton),
-                                static_cast<juce::Component*>(&zoomInButton) })
+                                static_cast<juce::Component*>(&zoomInButton),
+                                static_cast<juce::Component*>(&zoomOutButton) })
         canvas.addAndMakeVisible(c);
     autoKeyButton.setClickingTogglesState(true);
     harmonizeButton.setClickingTogglesState(true);
@@ -128,7 +134,7 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     aButton.setClickingTogglesState(true); bButton.setClickingTogglesState(true);
     aButton.setRadioGroupId(3101); bButton.setRadioGroupId(3101); aButton.setToggleState(true, juce::dontSendNotification);
 
-    for (auto* zb : { &zoomOutButton, &zoomInButton })
+    for (auto* zb : { &zoomInButton, &zoomOutButton })
     {
         zb->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff121820));
         zb->setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff1a2430));
@@ -136,15 +142,15 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
         zb->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
         zb->setConnectedEdges(juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
     }
-    zoomOutButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)]
-    {
-        if (safe != nullptr)
-            safe->noteEditor.zoomTimelineOut();
-    };
     zoomInButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)]
     {
         if (safe != nullptr)
             safe->noteEditor.zoomTimelineIn();
+    };
+    zoomOutButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)]
+    {
+        if (safe != nullptr)
+            safe->noteEditor.zoomTimelineOut();
     };
 
     harmonizeButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff247aff));
@@ -155,17 +161,21 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     {
         if (safe == nullptr)
             return;
-        if (safe->audioProcessor.isAnalyzeArmed())
+        const auto state = safe->audioProcessor.getAnalysisState();
+        if (state == AnalysisState::capturing)
         {
-            // Finalize capture without zeroing the cursor.
-            safe->audioProcessor.finalizeAnalyzeCapture();
+            safe->audioProcessor.requestFinishAnalysis();
+            safe->audioProcessor.finishAnalysisCapture();
         }
         else
         {
-            // New analysis may reset the editor cursor; do not finalize-path reset.
-            safe->audioProcessor.markAnalysisStartFromCurrentTransport();
-            safe->noteEditor.resetCursorForNewAnalysis();
-            safe->audioProcessor.beginAnalyzeCapture();
+            // First capture anchors the timeline; later ANALYZE passes only append ahead.
+            if (! safe->audioProcessor.hasPublishedAnalysis())
+            {
+                safe->audioProcessor.markAnalysisStartFromCurrentTransport();
+                safe->noteEditor.resetCursorForNewAnalysis();
+            }
+            safe->audioProcessor.startAnalysisCapture();
         }
         safe->refreshAnalyzeButtonVisual();
     };
@@ -178,7 +188,8 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     presetBox.onChange = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)] {
         if (safe == nullptr || safe->presetBox.getSelectedItemIndex() < 0) return;
         juce::String error;
-        if (! safe->audioProcessor.presets.loadPreset(safe->presetBox.getText(), error)) safe->showError(error);
+        if (! safe->audioProcessor.presets.loadPreset(safe->presetBox.getText(), error))
+            safe->showError(error);
     };
     prevButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)] {
         if (safe == nullptr || safe->presetBox.getNumItems() == 0) return;
@@ -195,8 +206,10 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     };
 
     detectedLabel.setJustificationType(juce::Justification::centred);
+    detectedLabel.setMinimumHorizontalScale(1.0f);
     detectedLabel.setFont(juce::Font(juce::FontOptions(18.0f, juce::Font::bold)));
     detectedLabel.setColour(juce::Label::textColourId, juce::Colour(cyan));
+    detectedLabel.setText("DETECTING...", juce::dontSendNotification);
     canvas.addAndMakeVisible(detectedLabel);
 
     harmonyAtt = std::make_unique<SliderAttachment>(p.apvts, nf::params::harmony, harmony);
@@ -244,18 +257,28 @@ void NFVocalHarmonizerAudioProcessorEditor::layoutFixedCanvas()
     auto header = juce::Rectangle<int>(0, 6, designWidth, headerHeight);
     auto content = header.reduced(outerMargin, 0);
 
-    // Brand block on the left (replaces NF Audio Tools). Title + subtitle share one centre axis.
-    constexpr int brandWidth = 340;
+    // Brand: top-left, both lines left-aligned on the same axis (matches approved logo edit).
+    constexpr int brandWidth = 390;
     auto brand = content.removeFromLeft(brandWidth);
-    titleLabel.setBounds(brand.getX(), 8, brand.getWidth(), 31);
-    subtitleLabel.setBounds(brand.getX(), 40, brand.getWidth(), 16);
+
+    // Left-side brand block: both lines share one width so the subtitle
+    // centres under "NF Vocal Harmonizer".
+    const auto titleFont = titleLabel.getFont();
+    const auto subFont = subtitleLabel.getFont();
+    const float titleTextW = juce::GlyphArrangement::getStringWidth(
+        titleFont, titleLabel.getText());
+    const float subTextW = juce::GlyphArrangement::getStringWidth(
+        subFont, subtitleLabel.getText());
+    const int blockW = juce::jlimit(
+        160, brand.getWidth(),
+        juce::roundToInt(juce::jmax(titleTextW, subTextW)) + 8);
+
+    titleLabel.setBounds(brand.getX(), 10, blockW, 30);
+    subtitleLabel.setBounds(brand.getX(), 40, blockW, 18);
     titleLabel.setJustificationType(juce::Justification::centred);
     subtitleLabel.setJustificationType(juce::Justification::centred);
 
-    // Gap before the exclusive control cluster on the right.
     content.removeFromLeft(titleControlsGap);
-
-    // Exclusive controls region — fixed width, left-to-right placement.
     auto controls = content.removeFromRight(controlsWidth);
 
     constexpr int normalHeight = 30;
@@ -305,10 +328,24 @@ void NFVocalHarmonizerAudioProcessorEditor::layoutFixedCanvas()
     autoKeyButton.setBounds(top.removeFromLeft(90).reduced(4, 22));
     keyBox.setBounds(top.removeFromLeft(72).reduced(3, 22));
     scaleBox.setBounds(top.removeFromLeft(135).reduced(3, 22));
+    // Key-detection readout (cyan DETECTING... / detected key) — separate from ANALYZE button.
     detectedLabel.setBounds(top.reduced(4, 21));
-    noteEditor.setBounds(b.removeFromTop(HarmonyNoteEditor::preferredPanelHeight));
-    auto zoomRow = b.removeFromTop(24);
-    b.removeFromTop(4);
+    detectedLabel.toFront(false);
+
+    constexpr int expandTabH = 12;
+    constexpr int zoomH = 24;
+    constexpr int zoomGap = 4;
+    constexpr int harmonizeH = 62;
+    // Editor expand tab wins: rail is allowed to shrink (IntervalRail fits +8ve…-8ve).
+    const int reservedBelowEditor = expandTabH + zoomH + zoomGap + harmonizeH + intervalRailMinHeight;
+    const int maxEditorHere = juce::jmax(editorPanelHeightMin, b.getHeight() - reservedBelowEditor);
+    editorPanelHeight = juce::jlimit(editorPanelHeightMin, maxEditorHere, editorPanelHeight);
+
+    noteEditor.setBounds(b.removeFromTop(editorPanelHeight));
+    editorExpandTab.setBounds(b.removeFromTop(expandTabH));
+    editorExpandTab.toFront(false);
+    auto zoomRow = b.removeFromTop(zoomH);
+    b.removeFromTop(zoomGap);
     {
         constexpr int btn = 24;
         auto zoomArea = zoomRow.removeFromRight(btn * 2 + 4);
@@ -316,7 +353,7 @@ void NFVocalHarmonizerAudioProcessorEditor::layoutFixedCanvas()
         zoomArea.removeFromLeft(4);
         zoomInButton.setBounds(zoomArea.removeFromLeft(btn));
     }
-    harmonizeButton.setBounds(b.removeFromBottom(62).reduced(60, 7));
+    harmonizeButton.setBounds(b.removeFromBottom(harmonizeH).reduced(60, 7));
     rail.setBounds(b.reduced(70, 2));
 
     const int cell = knobs.getWidth() / 5;
@@ -330,9 +367,33 @@ void NFVocalHarmonizerAudioProcessorEditor::layoutFixedCanvas()
     }
 }
 
+void NFVocalHarmonizerAudioProcessorEditor::setEditorPanelHeight(int newHeight)
+{
+    // Expand tab has priority — interval rail may shrink.
+    constexpr int reservedBelow = 12 + 24 + 4 + 62 + intervalRailMinHeight;
+    const int available = juce::jmax(editorPanelHeightMin,
+                                     designHeight - 18 * 2 - 84 - 82 - 4 - reservedBelow - 154 - 8);
+    const int upper = juce::jmin(editorPanelHeightMax, available);
+    const int clamped = juce::jlimit(editorPanelHeightMin, upper, newHeight);
+    if (clamped == editorPanelHeight)
+        return;
+    editorPanelHeight = clamped;
+    layoutFixedCanvas();
+    editorExpandTab.repaint();
+}
+
 void NFVocalHarmonizerAudioProcessorEditor::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xff0b0f14));
+}
+
+bool NFVocalHarmonizerAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
+{
+    // Forward note-edit keys when the timeline has focus or a note is selected.
+    if (noteEditor.hasKeyboardFocus(true) || ! noteEditor.getSelectedIds().empty())
+        if (noteEditor.keyPressed(key))
+            return true;
+    return false;
 }
 
 void NFVocalHarmonizerAudioProcessorEditor::resetToDefaultSize()
@@ -375,9 +436,11 @@ void NFVocalHarmonizerAudioProcessorEditor::timerCallback()
                                   juce::dontSendNotification);
         }
         else if (detectedLabel.getText().isEmpty()
-                 || detectedLabel.getText() == "DETECTING…")
+                 || detectedLabel.getText() == "DETECTING..."
+                 || detectedLabel.getText().startsWith("DETECTING"))
         {
-            detectedLabel.setText("DETECTING…", juce::dontSendNotification);
+            // ASCII dots only — never Unicode ellipsis (shows as "DETECTINGâ€¦" in some hosts).
+            detectedLabel.setText("DETECTING...", juce::dontSendNotification);
         }
         // else keep last stable key text — don't flicker while confidence is low
     }
@@ -385,36 +448,34 @@ void NFVocalHarmonizerAudioProcessorEditor::timerCallback()
                                juce::dontSendNotification);
     keyBox.setEnabled(! autoMode); scaleBox.setEnabled(! autoMode);
     analyzeButton.setEnabled(true);
-    analyzeButton.setButtonText("ANALYZE");
     refreshAnalyzeButtonVisual();
 }
 
 void NFVocalHarmonizerAudioProcessorEditor::refreshAnalyzeButtonVisual()
 {
     const auto state = audioProcessor.getAnalysisState();
-    int visual = 0; // idle / failed → original look
+    int visual = 0;
     float intensity = 0.0f;
 
     switch (state)
     {
-        case AnalysisState::idle:
-        case AnalysisState::failed:
+        case AnalysisState::empty:
             visual = 0;
             intensity = 0.0f;
+            analyzeButton.setButtonText("ANALYZE");
             break;
-        case AnalysisState::armed:
-        case AnalysisState::completed:
-            visual = 1; // fixed neon green
-            intensity = 0.72f;
+        case AnalysisState::ready:
+            visual = 2; // stable green
+            intensity = 1.0f;
+            analyzeButton.setButtonText("ANALYZED");
             break;
-        case AnalysisState::analyzing:
+        case AnalysisState::capturing:
         {
-            visual = 2;
-            // ~1.5–2 Hz soft pulse (0.0018 * 2π ≈ 1.8 cycles/sec)
-            const float phase = std::fmod(static_cast<float>(juce::Time::getMillisecondCounterHiRes() * 0.0018),
-                                         juce::MathConstants<float>::twoPi);
-            const float pulse = 0.5f + 0.5f * std::sin(phase);
-            intensity = juce::jmap(pulse, 0.45f, 1.0f);
+            visual = 1; // red blink ~2 Hz
+            const auto ms = juce::Time::getMillisecondCounter();
+            const bool bright = ((ms / 250u) % 2u) == 0u;
+            intensity = bright ? 1.0f : 0.35f;
+            analyzeButton.setButtonText("ANALYZING");
             break;
         }
     }
@@ -428,8 +489,10 @@ void NFVocalHarmonizerAudioProcessorEditor::refreshPresetList(const juce::String
 {
     presetBox.clear(juce::dontSendNotification);
     presetBox.addItemList(audioProcessor.presets.listPresets(), 1);
-    if (select.isNotEmpty()) presetBox.setText(select, juce::dontSendNotification);
-    else presetBox.setText("Default", juce::dontSendNotification);
+    if (select.isNotEmpty())
+        presetBox.setText(select, juce::dontSendNotification);
+    else
+        presetBox.setSelectedItemIndex(0, juce::dontSendNotification); // Default
 }
 
 void NFVocalHarmonizerAudioProcessorEditor::savePresetAsync()
@@ -509,7 +572,8 @@ void NFVocalHarmonizerAudioProcessorEditor::showHeaderMenu()
     menu.addItem(3, juce::String::fromUTF8(u8"Manual do usuário (PT)…"));
     menu.addSeparator();
     menu.addItem(4, "Reset window size");
-    menu.addItem(5, "About");
+    menu.addItem(5, "Reset parameters to Default");
+    menu.addItem(6, "About");
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(menuButton),
                        [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)](int result)
                        {
@@ -522,6 +586,11 @@ void NFVocalHarmonizerAudioProcessorEditor::showHeaderMenu()
                            else if (result == 4)
                                safe->resetToDefaultSize();
                            else if (result == 5)
+                           {
+                               safe->audioProcessor.presets.loadFactoryDefault();
+                               safe->refreshPresetList("Default");
+                           }
+                           else if (result == 6)
                                juce::AlertWindow::showMessageBoxAsync(
                                    juce::MessageBoxIconType::InfoIcon,
                                    "NF Vocal Harmonizer",

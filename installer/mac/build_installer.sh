@@ -20,7 +20,41 @@ for path in "$VST3" "$AU" "$AAX"; do
     echo "  cmake -S . -B build-macos -DJUCE_DIR=\$HOME/Downloads/JUCE \\" >&2
     echo "    -DNF_ENABLE_AAX=ON -DJUCE_AAX_SDK_PATH=\$HOME/Downloads/aax-sdk-2-9-0 \\" >&2
     echo "    -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64" >&2
-    echo "  cmake --build build-macos --config Release --target NFVocalHarmonizer NFVocalHarmonizer_AAX" >&2
+    echo "  cmake --build build-macos --config Release --target \\" >&2
+    echo "    NFVocalHarmonizer_AU NFVocalHarmonizer_VST3 NFVocalHarmonizer_AAX" >&2
+    exit 1
+  fi
+done
+
+# NFVocalHarmonizer alone only builds SharedCode — AU/VST3 must be explicit format targets.
+AU_BIN="$AU/Contents/MacOS/NF Vocal Harmonizer"
+VST3_BIN="$VST3/Contents/MacOS/NF Vocal Harmonizer"
+check_marker() {
+  local bin="$1"
+  local needle="$2"
+  python3 - "$bin" "$needle" <<'PY'
+import sys
+path, needle = sys.argv[1], sys.argv[2].encode()
+data = open(path, "rb").read()
+sys.exit(0 if needle in data else 1)
+PY
+}
+for bin in "$AU_BIN" "$VST3_BIN"; do
+  if [[ ! -f "$bin" ]]; then
+    echo "error: missing plugin binary $bin" >&2
+    echo "Rebuild format targets: NFVocalHarmonizer_AU NFVocalHarmonizer_VST3 NFVocalHarmonizer_AAX" >&2
+    exit 1
+  fi
+  if ! check_marker "$bin" "DETECTING..."; then
+    echo "error: $bin looks stale (missing DETECTING... marker)." >&2
+    exit 1
+  fi
+  if ! check_marker "$bin" "CORRECTION:"; then
+    echo "error: $bin looks stale (missing vocal-blob CORRECTION HUD)." >&2
+    exit 1
+  fi
+  if ! check_marker "$bin" "FLAT"; then
+    echo "error: $bin looks stale (missing FLAT editor tool)." >&2
     exit 1
   fi
 done
@@ -93,7 +127,7 @@ if [[ -f "$ROOT_DIR/Manuals/pdf/NF_Vocal_Harmonizer_User_Manual_English.pdf" ]];
 fi
 cat > "$DMG_STAGING/Read Me.txt" <<'EOF'
 NF Vocal Harmonizer v1.0
-NF Audio Tools / Nenno Fernando
+NF Audio Tools — By Nenno Fernando
 
 1. Open "NF Vocal Harmonizer Installer.pkg"
 2. Keep VST3, AU and AAX selected
@@ -107,10 +141,13 @@ Install paths:
 
 User manuals (EN / PT) are embedded in the plugin.
 Open them from the ≡ menu in the header.
-Timeline pan: Option/Alt + drag (or Option/Alt + scroll).
 
-Built with Avid AAX SDK 2.9.0.
+Editor tools: SEL, FLAT (pencil), LINE (slope pencil), CUT (scissors).
+ANALYZE can append later bars without overwriting earlier captures.
+Default preset restores factory parameters.
+
 © 2026 NF Audio Tools / Nenno Fernando
+All rights reserved.
 EOF
 
 hdiutil create -volname "$PLUGIN_NAME" -srcfolder "$DMG_STAGING" -ov -format UDZO \

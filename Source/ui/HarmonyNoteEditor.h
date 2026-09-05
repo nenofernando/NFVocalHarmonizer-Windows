@@ -1,9 +1,11 @@
 #pragma once
 #include <JuceHeader.h>
+#include "../dsp/AnalysisState.h"
 #include "../dsp/HarmonyNoteTypes.h"
 #include "../dsp/MusicalScale.h"
 #include "TimelineViewState.h"
 #include <vector>
+#include <cstdint>
 
 class NFVocalHarmonizerAudioProcessor;
 
@@ -52,6 +54,9 @@ public:
     void zoomTimelineIn();
     void zoomTimelineOut();
 
+    /** Recalculate vertical pitch scale so every VOICE/HARMONY note is visible. */
+    void fitPitchToAllNotes();
+
     void resetCursorForNewAnalysis() noexcept;
     void restoreCursorFromState(double seconds) noexcept;
     double getCursorSecondsForState() const noexcept;
@@ -62,18 +67,36 @@ public:
     static constexpr float dividerHeight = 1.0f;
     static constexpr float outerPadding = 5.0f;
     // Taller panel so VOICE/HARMONY lanes have more vertical pitch room.
-    static constexpr int preferredPanelHeight = 188;
+    // Keep modest so the interval rail always fits +8 … -8.
+    static constexpr int preferredPanelHeight = 160;
 
 private:
-    enum class DragMode { none, pitchEdit, marquee, pan, pitchPan, scrub };
+    enum class EditTool { select = 0, pencilFlat, pencilSlope, scissors };
+    enum class DragMode { none, pitchEdit, marquee, pan, pitchPan, scrub, pencil, scissors };
 
     void timerCallback() override;
+    void setEditTool(EditTool tool);
+    void refreshToolButtonStyles();
+    void drawPencilPreview(juce::Graphics& g) const;
+    void beginPencilGesture(const nf::notes::HarmonyNote& note, juce::Point<float> pos);
+    void updatePencilGesture(juce::Point<float> pos, bool fine);
+    void commitPencilGesture();
+    void cancelPencilGesture();
+    float proposedMidiFromY(float y) const;
+    float offsetFromProposedMidi(const nf::notes::HarmonyNote& note, float proposedMidi) const;
     PitchEditorLayout computeLayout(juce::Rectangle<float> bounds) const;
     int hitTestNote(juce::Point<float> pos) const;
     juce::Rectangle<float> noteBounds(const nf::notes::HarmonyNote&, bool harmonyLane) const;
     float midiToY(float midi, bool harmonyLane) const;
     float yToMidi(float y, bool harmonyLane) const;
     void drawPitchGrid(juce::Graphics& g, bool harmonyLane) const;
+    void drawWaveformBackground(juce::Graphics& g, juce::Rectangle<float> area) const;
+    void drawMidiScaleLabels(juce::Graphics& g) const;
+    void drawVocalBlob(juce::Graphics& g, const nf::notes::HarmonyNote& note, bool harmonyLane, bool selected) const;
+    void drawSelectionHud(juce::Graphics& g) const;
+    const std::vector<nf::notes::PitchSample>& activeVizSamples() const noexcept;
+    float amplitudeAtTime(double timeSec, const nf::notes::HarmonyNote& note) const;
+    float pitchMidiAtTime(double timeSec, const nf::notes::HarmonyNote& note, bool harmonyLane) const;
     void updateTooltip(float offsetSemitones);
     void commitPitchDrag(bool apply);
     void zoomTimelineAtMouse(float deltaY, float mouseX);
@@ -82,8 +105,14 @@ private:
     void panPitchFromWheel(float deltaY);
     void refreshContentRangeFromNotes();
     void fitViewsToNewNotesIfNeeded(bool notesIdentityChanged);
-    void followPlayheadPage(double playSec);
+    void applyAutoFitPitchVertical(bool allowShrink);
+    float harmonyDisplayMidi(const nf::notes::HarmonyNote& note) const;
+    float liveAutoHarmonyMidi(const nf::notes::HarmonyNote& note) const;
+    void updateContinuousFollow();
     void showZoomHud();
+    float timeToX(double timeSec, juce::Rectangle<float> lane) const noexcept;
+    void syncDisplayedVisibleStartFromView() noexcept;
+    void applyDisplayedVisibleStartToView() noexcept;
     void clearSelection();
     void selectOnly(const juce::String& id);
     void toggleSelection(const juce::String& id);
@@ -102,7 +131,7 @@ private:
     double timeAtMouseX(float mouseX) const;
     double getDisplayPlayheadSeconds() const;
     bool isNearPlayhead(float mouseX) const;
-    void updateCursorFromTransport();
+    void updatePlayhead();
     int64_t getAnalysisLengthSamples() const noexcept;
     void nudgeSelectedPitch(int direction, bool fineCents);
     std::pair<int, nf::dsp::ScaleType> keyScale() const;
@@ -113,7 +142,20 @@ private:
     PitchEditorLayout layout;
     juce::ComboBox snapBox;
     juce::Label snapLabel;
+    juce::TextButton fitPitchButton { "FIT" };
+    juce::TextButton selectToolButton { "SEL" };
+    juce::TextButton pencilFlatButton { "FLAT" };
+    juce::TextButton pencilSlopeButton { "LINE" };
+    juce::TextButton scissorsButton { "CUT" };
+    EditTool editTool = EditTool::select;
     std::vector<juce::String> selectedIds;
+    juce::String pencilNoteId;
+    double pencilT0 = 0.0;
+    double pencilT1 = 0.0;
+    float pencilOffset0 = 0.0f;
+    float pencilOffset1 = 0.0f;
+    float pencilMidi0 = 0.0f;
+    float pencilMidi1 = 0.0f;
     juce::String dragId;
     float dragStartOffset = 0.0f;
     float dragStartMidi = 0.0f;
@@ -130,9 +172,10 @@ private:
     double panDragStartVisibleTime = 0.0;
     float panDragStartTopMidi = 84.0f;
 
-    // Persistent cursor relative to analysisStartHostSample (never cleared on host stop).
-    int64_t editorCursorSample = 0;
-    int64_t lastDisplayedPlayingSample = 0;
+    // Persistent playhead (relative to analysisStart). Never copy host position while stopped.
+    int64_t displayedPlayheadSample = 0;
+    int64_t lastValidPlayingSample = 0;
+    int64_t frozenStopSample = 0;
 
     bool pendingEmptyGesture = false;
     juce::Point<float> emptyGestureOrigin;
@@ -146,11 +189,16 @@ private:
     bool userNavigatedPitch = false;
     bool followPlayhead = true;
     bool wasPlaying = false;
+    /** Continuous-follow viewport origin (double). Notes + playhead share this via timeToX. */
+    double displayedVisibleStart = 0.0;
     size_t lastFittedNoteCount = 0;
     double lastFittedContentStart = 0.0;
     double lastFittedContentEnd = 0.0;
     float lastFittedMidiMin = 0.0f;
     float lastFittedMidiMax = 0.0f;
+    int lastIntervalChoice = -1;
+    AnalysisState lastPitchFitAnalysisState = AnalysisState::empty;
+    uint64_t lastPitchFitRevision = 0;
     bool shiftMarqueeAdditive = false;
     juce::Point<float> marqueeOrigin;
     juce::Rectangle<float> marqueeRect;

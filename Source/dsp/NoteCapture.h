@@ -23,6 +23,9 @@ public:
 
     void clearRaw();
 
+    /** Captured hops for UI viz (message thread). Empty after clearRaw. */
+    const std::vector<PitchSample>& getRawSamples() const noexcept { return raw; }
+
 private:
     PitchSampleRing sampleRing;
     std::vector<PitchSample> raw;

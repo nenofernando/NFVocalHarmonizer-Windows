@@ -56,6 +56,7 @@ void YinPitchDetector::analyse()
     if (rms < 0.0025f)
     {
         estimate = {};
+        estimate.amplitude = rms;
         return;
     }
 
@@ -104,6 +105,7 @@ void YinPitchDetector::analyse()
     if (bestTau < 0 || bestValue > 0.42f)
     {
         estimate = {};
+        estimate.amplitude = rms;
         return;
     }
 
@@ -123,6 +125,7 @@ void YinPitchDetector::analyse()
     estimate.frequencyHz = hz;
     estimate.midiNote = midi;
     estimate.confidence = juce::jlimit(0.0f, 1.0f, 1.0f - bestValue);
+    estimate.amplitude = rms;
     estimate.voiced = std::isfinite(midi) && hz >= 65.0f && hz <= 1000.0f;
 }
 }

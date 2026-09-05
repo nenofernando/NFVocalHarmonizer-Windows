@@ -18,11 +18,29 @@ juce::String PresetManager::sanitiseName(const juce::String& input)
 juce::StringArray PresetManager::listPresets() const
 {
     juce::StringArray names;
+    names.add("Default");
     const auto directory = getPresetDirectory();
-    if (! directory.exists()) return names;
-    for (const auto& file : directory.findChildFiles(juce::File::findFiles, false, "*.nfhpreset"))
-        names.add(file.getFileNameWithoutExtension());
-    names.sortNatural();
+    if (directory.exists())
+    {
+        for (const auto& file : directory.findChildFiles(juce::File::findFiles, false, "*.nfhpreset"))
+        {
+            const auto name = file.getFileNameWithoutExtension();
+            if (name.equalsIgnoreCase("Default"))
+                continue; // reserved for factory reset
+            names.add(name);
+        }
+    }
+    // Keep Default first; sort the rest.
+    if (names.size() > 1)
+    {
+        juce::StringArray rest;
+        for (int i = 1; i < names.size(); ++i)
+            rest.add(names[i]);
+        rest.sortNatural();
+        names.clear();
+        names.add("Default");
+        names.addArray(rest);
+    }
     return names;
 }
 
@@ -30,6 +48,8 @@ bool PresetManager::savePreset(const juce::String& rawName, juce::String& error)
 {
     const auto name = sanitiseName(rawName);
     if (name.isEmpty()) { error = "Preset name is empty."; return false; }
+    if (name.equalsIgnoreCase("Default"))
+    { error = "\"Default\" is reserved for factory parameters."; return false; }
     return savePresetToFile(getPresetDirectory().getChildFile(name + ".nfhpreset"), error);
 }
 
@@ -60,6 +80,11 @@ bool PresetManager::savePresetToFile(const juce::File& target, juce::String& err
 
 bool PresetManager::loadPreset(const juce::String& name, juce::String& error)
 {
+    if (name.trim().equalsIgnoreCase("Default"))
+    {
+        loadFactoryDefault();
+        return true;
+    }
     return loadPresetFromFile(getPresetDirectory().getChildFile(sanitiseName(name) + ".nfhpreset"), error);
 }
 
@@ -73,5 +98,17 @@ bool PresetManager::loadPresetFromFile(const juce::File& file, juce::String& err
     if (! restored.isValid()) { error = "Preset state is invalid."; return false; }
     state.replaceState(restored);
     return true;
+}
+
+void PresetManager::loadFactoryDefault()
+{
+    for (auto* param : state.processor.getParameters())
+    {
+        if (param == nullptr)
+            continue;
+        param->beginChangeGesture();
+        param->setValueNotifyingHost(param->getDefaultValue());
+        param->endChangeGesture();
+    }
 }
 

@@ -47,17 +47,57 @@ public:
     void setStateInformation(const void*, int) override;
 
     void resetKeyAnalysis() { engine.resetKeyAnalysis(); }
-    void beginAnalyzeCapture();
-    void finalizeAnalyzeCapture();
-    bool isAnalyzeArmed() const noexcept { return capture.isArmed(); }
+
+    /** Start capture — only from ANALYZE click. Does not erase the published map. */
+    void startAnalysisCapture();
+    /** Request finish from UI or Play→Stop signal (safe from any thread). */
+    void requestFinishAnalysis() noexcept;
+    /** Finalize on message thread: publish scratch or keep previous map. */
+    void finishAnalysisCapture();
+
+    bool isAnalysisCapturing() const noexcept
+    {
+        return analysisState.load(std::memory_order_acquire) == AnalysisState::capturing;
+    }
+    bool hasPublishedAnalysis() const noexcept
+    {
+        return publishedAnalysisRevision.load(std::memory_order_acquire) > 0
+               || ! noteModel.getNotes().empty();
+    }
     AnalysisState getAnalysisState() const noexcept
     {
-        return analysisState.load(std::memory_order_relaxed);
+        return analysisState.load(std::memory_order_acquire);
     }
+    uint64_t getPublishedAnalysisRevision() const noexcept
+    {
+        return publishedAnalysisRevision.load(std::memory_order_acquire);
+    }
+    /** processBlock count while capture was armed — must stay flat when READY (TEST B). */
+    uint64_t getAnalysisCaptureWriteCount() const noexcept
+    {
+        return analysisCaptureWriteCount.load(std::memory_order_relaxed);
+    }
+
+    // Legacy aliases used by older call sites.
+    void beginAnalyzeCapture() { startAnalysisCapture(); }
+    void finalizeAnalyzeCapture() { finishAnalysisCapture(); }
+    bool isAnalyzeArmed() const noexcept { return isAnalysisCapturing(); }
 
     nf::dsp::PitchEstimate getPitchEstimate() const { return engine.getPitchEstimate(); }
     nf::dsp::ScaleResult getDetectedScale() const { return engine.getDetectedScale(); }
     nf::dsp::MeterSnapshot getMeters() const { return engine.getMeters(); }
+
+    /** Frozen pitch/amplitude hops for editor blobs/waveform (message thread). */
+    const std::vector<nf::notes::PitchSample>& getPublishedVizSamples() const noexcept
+    {
+        return publishedVizSamples;
+    }
+
+    /** Live capture hops while ANALYZING; empty when not capturing. */
+    const std::vector<nf::notes::PitchSample>& getLiveCaptureVizSamples() const noexcept
+    {
+        return capture.getRawSamples();
+    }
 
     TransportSnapshot getTransportSnapshot() const noexcept;
     void markAnalysisStartFromCurrentTransport() noexcept;
@@ -89,6 +129,7 @@ private:
 
     nf::dsp::HarmonyEngine engine;
     nf::notes::NoteCapture capture;
+    std::vector<nf::notes::PitchSample> publishedVizSamples;
     juce::ValueTree slotA { "SLOT_A" }, slotB { "SLOT_B" };
 
     std::atomic<int64_t> transportCurrentSample { 0 };
@@ -102,7 +143,11 @@ private:
     std::atomic<double> editorCursorSecondsForState { 0.0 };
     std::atomic<double> pendingEditorCursorSeconds { -1.0 };
 
-    std::atomic<AnalysisState> analysisState { AnalysisState::idle };
-    bool wasPlaying = false; // message-thread (ANALYZE finalize)
+    std::atomic<AnalysisState> analysisState { AnalysisState::empty };
+    std::atomic<bool> finishAnalysisRequested { false };
+    std::atomic<uint64_t> publishedAnalysisRevision { 0 };
+    std::atomic<uint64_t> analysisCaptureWriteCount { 0 };
+    std::atomic<bool> wasHostPlayingAudio { false };
+    bool wasPlaying = false; // message-thread mirror for diagnostics
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NFVocalHarmonizerAudioProcessor)
 };

@@ -1,33 +1,24 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 
-enum class AnalysisState : int
+enum class AnalysisState : uint8_t
 {
-    idle = 0,
-    armed,
-    analyzing,
-    completed,
-    failed
+    empty = 0,
+    capturing,
+    ready
 };
-
-inline AnalysisState analysisStateForBegin(bool hostPlaying) noexcept
-{
-    return hostPlaying ? AnalysisState::analyzing : AnalysisState::armed;
-}
-
-inline AnalysisState analysisStateForFinalize(bool hasNotes) noexcept
-{
-    return hasNotes ? AnalysisState::completed : AnalysisState::failed;
-}
-
-inline AnalysisState analysisStateAfterArmedSeesPlay(AnalysisState state, bool hostPlaying) noexcept
-{
-    return (state == AnalysisState::armed && hostPlaying) ? AnalysisState::analyzing : state;
-}
 
 inline bool analysisShouldFinalizeOnStop(bool wasPlaying, bool hostPlaying) noexcept
 {
     // Loop / seek keep getIsPlaying() true — only Play→Stop finalizes.
     return wasPlaying && ! hostPlaying;
+}
+
+inline AnalysisState analysisStateAfterFinish(bool hasValidNewNotes, bool hasPublishedMap) noexcept
+{
+    if (hasValidNewNotes)
+        return AnalysisState::ready;
+    return hasPublishedMap ? AnalysisState::ready : AnalysisState::empty;
 }

@@ -1,0 +1,34 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 22,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "vst3-windows-x64",
+      "displayName": "Windows x64 VST3 Release",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-vst3-windows-x64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NF_BUILD_TESTS": "ON",
+        "NF_ENABLE_AAX": "OFF",
+        "JUCE_DIR": "${sourceDir}/JUCE"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-vst3-windows-x64",
+      "configurePreset": "vst3-windows-x64",
+      "configuration": "Release",
+      "targets": [
+        "NFVocalHarmonizer_VST3",
+        "NFVocalHarmonizerTests"
+      ]
+    }
+  ]
+}

@@ -10,6 +10,7 @@ struct PitchEstimate
     float frequencyHz = 0.0f;
     float midiNote = 0.0f;
     float confidence = 0.0f;
+    float amplitude = 0.0f; // observe-only RMS of analysis frame (UI / capture viz)
     bool voiced = false;
 };
 

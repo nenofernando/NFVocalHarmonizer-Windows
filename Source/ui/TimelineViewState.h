@@ -95,14 +95,59 @@ struct TimelineViewState
     }
 };
 
-/** Visual-only vertical pitch window (MIDI). Notes outside the band are off-screen until you pan. */
+/** Visible MIDI range after margin / min-octave / clamp (visual only). */
+struct VisiblePitchRange
+{
+    float minimum = 48.0f;
+    float maximum = 84.0f;
+};
+
+/**
+ * Build the auto-fit pitch window from raw note extrema.
+ * High notes map near the top of the lane; low notes near the bottom.
+ */
+inline VisiblePitchRange computeVisiblePitchRange(float minimumPitch, float maximumPitch,
+                                                  float pitchMarginSemitones = 2.0f,
+                                                  float minimumVisibleRange = 12.0f) noexcept
+{
+    if (! std::isfinite(minimumPitch) || ! std::isfinite(maximumPitch)
+        || maximumPitch < minimumPitch)
+    {
+        return { 48.0f, 60.0f };
+    }
+
+    float visibleMinimumPitch = std::floor(minimumPitch - pitchMarginSemitones);
+    float visibleMaximumPitch = std::ceil(maximumPitch + pitchMarginSemitones);
+
+    if (visibleMaximumPitch - visibleMinimumPitch < minimumVisibleRange)
+    {
+        const float centre = (visibleMaximumPitch + visibleMinimumPitch) * 0.5f;
+        visibleMinimumPitch = centre - minimumVisibleRange * 0.5f;
+        visibleMaximumPitch = centre + minimumVisibleRange * 0.5f;
+    }
+
+    visibleMinimumPitch = juce::jlimit(0.0f, 127.0f, visibleMinimumPitch);
+    visibleMaximumPitch = juce::jlimit(0.0f, 127.0f, visibleMaximumPitch);
+    if (visibleMaximumPitch - visibleMinimumPitch < minimumVisibleRange)
+    {
+        if (visibleMinimumPitch <= 0.0f)
+            visibleMaximumPitch = juce::jmin(127.0f, visibleMinimumPitch + minimumVisibleRange);
+        else if (visibleMaximumPitch >= 127.0f)
+            visibleMinimumPitch = juce::jmax(0.0f, visibleMaximumPitch - minimumVisibleRange);
+    }
+
+    return { visibleMinimumPitch, visibleMaximumPitch };
+}
+
+/** Visual-only vertical pitch window (MIDI). Auto-fit keeps all notes on-screen. */
 struct PitchViewState
 {
-    static constexpr float absoluteMinMidi = 24.0f; // C1 — covers low vocals / bass range
-    static constexpr float absoluteMaxMidi = 96.0f; // C7
+    static constexpr float absoluteMinMidi = 0.0f;
+    static constexpr float absoluteMaxMidi = 127.0f;
     static constexpr float minSpanMidi = 12.0f;
-    static constexpr float maxSpanMidi = 60.0f;
+    static constexpr float maxSpanMidi = 127.0f;
     static constexpr float defaultSpanMidi = 36.0f;
+    static constexpr float pitchMarginSemitones = 2.0f;
 
     float viewTopMidi = 84.0f;
     float viewSpanMidi = defaultSpanMidi;
@@ -118,12 +163,38 @@ struct PitchViewState
         clampView();
     }
 
-    void fitContent(float paddingSemitones = 3.0f) noexcept
+    /** Fit the viewport so every note in contentMin/Max is visible (with margin). */
+    void fitContent(float paddingSemitones = pitchMarginSemitones) noexcept
     {
-        const float paddedMin = juce::jmax(absoluteMinMidi, contentMinMidi - paddingSemitones);
-        const float paddedMax = juce::jmin(absoluteMaxMidi, contentMaxMidi + paddingSemitones);
-        viewSpanMidi = juce::jlimit(minSpanMidi, maxSpanMidi, paddedMax - paddedMin);
-        viewTopMidi = paddedMax;
+        const auto range = computeVisiblePitchRange(contentMinMidi, contentMaxMidi,
+                                                    paddingSemitones, minSpanMidi);
+        viewSpanMidi = juce::jlimit(minSpanMidi, maxSpanMidi, range.maximum - range.minimum);
+        viewTopMidi = range.maximum;
+        clampView();
+    }
+
+    /** Expand viewport upward/downward to include a pitch; never shrink. */
+    void expandToInclude(float midiPitch) noexcept
+    {
+        if (! std::isfinite(midiPitch))
+            return;
+        midiPitch = juce::jlimit(absoluteMinMidi, absoluteMaxMidi, midiPitch);
+        contentMinMidi = juce::jmin(contentMinMidi, midiPitch);
+        contentMaxMidi = juce::jmax(contentMaxMidi, midiPitch);
+
+        const float bottom = viewBottomMidi();
+        if (midiPitch < bottom)
+        {
+            const float need = bottom - midiPitch + pitchMarginSemitones;
+            viewSpanMidi = juce::jmin(maxSpanMidi, viewSpanMidi + need);
+            // Keep top; span grows downward.
+        }
+        else if (midiPitch > viewTopMidi)
+        {
+            const float need = midiPitch - viewTopMidi + pitchMarginSemitones;
+            viewTopMidi = midiPitch + pitchMarginSemitones;
+            viewSpanMidi = juce::jmin(maxSpanMidi, viewSpanMidi + need);
+        }
         clampView();
     }
 
@@ -135,7 +206,10 @@ struct PitchViewState
         const float room = padMax - padMin;
         if (room <= viewSpanMidi + 1.0e-3f)
         {
+            // Show the full content band centred in the span when possible.
             viewTopMidi = padMin + viewSpanMidi;
+            if (viewTopMidi < padMax)
+                viewTopMidi = padMax;
             viewTopMidi = juce::jlimit(absoluteMinMidi + viewSpanMidi, absoluteMaxMidi, viewTopMidi);
             return;
         }

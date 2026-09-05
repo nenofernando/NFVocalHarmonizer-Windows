@@ -1,0 +1,13 @@
+NF Vocal Harmonizer v1.0
+NF Audio Tools — By Nenno Fernando
+
+This installer places the VST3 plug-in in:
+  C:\Program Files\Common Files\VST3\NF Vocal Harmonizer.vst3
+
+After installation, rescan plug-ins in your DAW.
+
+User manuals (English / Portuguese) are also copied to the install folder
+and remain available from the ≡ menu inside the plug-in.
+
+© 2026 NF Audio Tools / Nenno Fernando
+All rights reserved.

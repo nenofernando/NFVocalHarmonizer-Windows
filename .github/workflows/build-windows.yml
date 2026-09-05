@@ -1,0 +1,116 @@
+name: Build Windows VST3 and Installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Windows x64 Release
+    runs-on: windows-2022
+    timeout-minutes: 60
+
+    env:
+      BUILD_DIR: build-vst3-windows-x64
+      LOG_DIR: build-logs
+      VST3_PATH: build-vst3-windows-x64/NFVocalHarmonizer_artefacts/Release/VST3/NF Vocal Harmonizer.vst3
+      INSTALLER_PATH: dist/NF-Vocal-Harmonizer-Windows-x64-Setup.exe
+
+    steps:
+      - name: Checkout NF Vocal Harmonizer
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout JUCE 9.0.1
+        uses: actions/checkout@v4
+        with:
+          repository: juce-framework/JUCE
+          ref: 9.0.1
+          path: JUCE
+          persist-credentials: false
+
+      - name: Record toolchain versions
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:LOG_DIR | Out-Null
+          cmake --version | Tee-Object "$env:LOG_DIR/cmake-version.log"
+
+      - name: Configure Windows x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake --preset vst3-windows-x64 2>&1 |
+            Tee-Object "$env:LOG_DIR/cmake-configure.log"
+          if ($LASTEXITCODE -ne 0) { throw "CMake configure failed: $LASTEXITCODE" }
+
+      - name: Build VST3
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake --build --preset build-vst3-windows-x64 --parallel 2>&1 |
+            Tee-Object "$env:LOG_DIR/cmake-build.log"
+          if ($LASTEXITCODE -ne 0) { throw "CMake build failed: $LASTEXITCODE" }
+
+      - name: Verify VST3 artefact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Test-Path $env:VST3_PATH)) {
+            throw "VST3 bundle not found: $env:VST3_PATH"
+          }
+          Get-ChildItem -Recurse $env:VST3_PATH |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize |
+            Out-String -Width 240 |
+            Set-Content "$env:LOG_DIR/vst3-files.log"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install innosetup -y --no-progress 2>&1 |
+            Tee-Object "$env:LOG_DIR/inno-setup-install.log"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup install failed: $LASTEXITCODE" }
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & .\build-installer-windows.ps1 -SkipBuild -SkipTests 2>&1 |
+            Tee-Object "$env:LOG_DIR/installer-build.log"
+          if ($LASTEXITCODE -ne 0) { throw "Installer build failed: $LASTEXITCODE" }
+          if (-not (Test-Path $env:INSTALLER_PATH)) {
+            throw "Installer not found: $env:INSTALLER_PATH"
+          }
+          Get-FileHash -Algorithm SHA256 $env:INSTALLER_PATH |
+            Format-List |
+            Out-String |
+            Set-Content "$env:LOG_DIR/installer-sha256.log"
+
+      - name: Upload VST3 Windows x64
+        uses: actions/upload-artifact@v4
+        with:
+          name: VST3 Windows x64
+          path: ${{ env.VST3_PATH }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: NF Vocal Harmonizer Windows x64 Installer
+          path: ${{ env.INSTALLER_PATH }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows build logs
+          path: ${{ env.LOG_DIR }}
+          if-no-files-found: warn
+          retention-days: 14

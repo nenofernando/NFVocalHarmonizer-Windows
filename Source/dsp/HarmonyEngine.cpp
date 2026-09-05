@@ -158,6 +158,7 @@ void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySetti
                 sample.timeSec = sampleTime;
                 sample.midi = estimate.midiNote;
                 sample.confidence = estimate.confidence;
+                sample.amplitude = estimate.amplitude;
                 sample.voiced = estimate.voiced;
                 captureRing->push(sample);
             }
@@ -313,8 +314,13 @@ void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySetti
 
 PitchEstimate HarmonyEngine::getPitchEstimate() const noexcept
 {
-    return { pitchHz.load(std::memory_order_relaxed), pitchMidi.load(std::memory_order_relaxed),
-             pitchConfidence.load(std::memory_order_relaxed), pitchVoiced.load(std::memory_order_relaxed) };
+    PitchEstimate e;
+    e.frequencyHz = pitchHz.load(std::memory_order_relaxed);
+    e.midiNote = pitchMidi.load(std::memory_order_relaxed);
+    e.confidence = pitchConfidence.load(std::memory_order_relaxed);
+    e.amplitude = 0.0f; // live UI meter uses confidence/midi; amplitude is capture-hop only
+    e.voiced = pitchVoiced.load(std::memory_order_relaxed);
+    return e;
 }
 
 ScaleResult HarmonyEngine::getDetectedScale() const noexcept

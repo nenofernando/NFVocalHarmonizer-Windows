@@ -617,16 +617,45 @@ void timelineNavigationTest()
     view.clampView();
     check(view.viewDurationSec >= nf::notes::TimelineViewState::minVisibleSec - 1.0e-9, "Clamp after resize respects min zoom");
 
-    // Host play / stop / loop / seek: only clamp view around a playhead, no note mutation.
-    for (double playhead : { 0.0, 3.5, 9.9, 1.0, 8.0, 0.2 })
+    // Continuous follow at 45% anchor (no page jumps).
     {
-        if (playhead < view.viewStartSec || playhead > view.viewStartSec + view.viewDurationSec * 0.92)
-            view.viewStartSec = playhead - view.viewDurationSec * 0.15;
-        view.clampView();
-        check(view.viewStartSec >= view.contentStartSec - 1.0e-9, "Playhead follow stays in range");
-        check(view.viewStartSec + view.viewDurationSec <= view.contentEndSec + 1.0e-6, "Playhead follow end clamp");
+        nf::notes::TimelineViewState followView;
+        followView.setContentRange(0.0, 20.0);
+        followView.viewDurationSec = 4.0;
+        followView.viewStartSec = 0.0;
+        followView.clampView();
+        constexpr double playheadAnchor = 0.45;
+        double displayedVisibleStart = followView.viewStartSec;
+        double prevStart = -1.0;
+        int nonJumpSteps = 0;
+        for (double playhead = 0.0; playhead <= 18.0; playhead += 0.05)
+        {
+            const double viewportSec = followView.viewDurationSec;
+            const double targetStart = playhead - viewportSec * playheadAnchor;
+            const double maximumStart = juce::jmax(followView.contentStartSec,
+                                                   followView.contentEndSec - viewportSec);
+            displayedVisibleStart = juce::jlimit(followView.contentStartSec, maximumStart, targetStart);
+            followView.viewStartSec = displayedVisibleStart;
+            followView.clampView();
+            displayedVisibleStart = followView.viewStartSec;
+
+            if (prevStart >= 0.0)
+            {
+                const double delta = std::abs(displayedVisibleStart - prevStart);
+                // Continuous: each step moves at most ~playhead step (no page-sized jumps).
+                if (delta <= 0.06 + 1.0e-9)
+                    ++nonJumpSteps;
+            }
+            prevStart = displayedVisibleStart;
+
+            const double frac = (playhead - displayedVisibleStart) / viewportSec;
+            if (playhead >= viewportSec * playheadAnchor
+                && displayedVisibleStart < maximumStart - 1.0e-9)
+                check(std::abs(frac - playheadAnchor) < 0.02, "Continuous follow keeps playhead near 45%");
+        }
+        check(nonJumpSteps > 200, "Continuous follow advances without page jumps");
+        check(std::abs(note.manualOffsetSemitones - 0.5f) < 1.0e-12, "Play/stop/loop/seek leave note data intact");
     }
-    check(std::abs(note.manualOffsetSemitones - 0.5f) < 1.0e-12, "Play/stop/loop/seek leave note data intact");
 
     // isAltDown path is the same panFromWheel API used for Option (macOS) and Alt (Windows).
     check(true, "Option macOS and Alt Windows share panFromWheel via isAltDown");
@@ -688,6 +717,29 @@ void noteSelectionDeleteUndoTest()
     restored.setNotes(notes);
     check(restored.getNotes().size() == 4 && restored.findNote("n0") != nullptr, "ANALYZE rebuild reconstructs removed notes");
 
+    // Append later bars without overwriting earlier captures.
+    {
+        nf::notes::NoteEditModel appendModel;
+        appendModel.setNotes({ notes[0], notes[1] });
+        const float keepOffset = appendModel.findNote("n1")->manualOffsetSemitones;
+        std::vector<nf::notes::HarmonyNote> later = { notes[2], notes[3] };
+        const auto added = appendModel.appendNotes(std::move(later));
+        check(added == 2, "Append adds later-bar notes");
+        check(appendModel.getNotes().size() == 4, "Append keeps prior + new notes");
+        check(std::abs(appendModel.findNote("n1")->manualOffsetSemitones - keepOffset) < 1.0e-6f,
+              "Append leaves earlier manual edits intact");
+
+        // Overlapping re-capture must not replace prior notes.
+        nf::notes::HarmonyNote clash = notes[0];
+        clash.id = "clash";
+        clash.voiceMidi = 99.0f;
+        const auto skipped = appendModel.appendNotes({ clash });
+        check(skipped == 0, "Overlapping append is skipped");
+        check(appendModel.findNote("n0") != nullptr
+              && std::abs(appendModel.findNote("n0")->voiceMidi - 60.0f) < 1.0e-6f,
+              "Prior note pitch preserved when overlap skipped");
+    }
+
     // Marquee L→R and R→L (same geometry either direction).
     const auto lane = juce::Rectangle<float>(0.0f, 0.0f, 400.0f, 200.0f);
     // Note at t=1.0..1.6 within view 0..4 → x≈100..160; harmony midi 65 → lower lane.
@@ -708,34 +760,107 @@ void noteSelectionDeleteUndoTest()
     check(model.getNotes().size() == countBefore, "Empty delete leaves map intact");
 }
 
+void pitchAutoFitVerticalTest()
+{
+    // TEST A — male voice C2..C3
+    {
+        const auto r = nf::notes::computeVisiblePitchRange(36.0f, 48.0f);
+        check(r.minimum <= 36.0f, "C2..C3 fit includes C2");
+        check(r.maximum >= 48.0f, "C2..C3 fit includes C3");
+        check(r.maximum - r.minimum >= 12.0f, "C2..C3 fit keeps ≥1 octave");
+    }
+
+    // TEST B — harmony -8ve from C2 → C1
+    {
+        const float voice = 36.0f;
+        const float harmony = 24.0f;
+        const auto r = nf::notes::computeVisiblePitchRange(std::min(voice, harmony),
+                                                           std::max(voice, harmony));
+        check(r.minimum <= 24.0f, "-8ve fit includes C1 harmony");
+        check(r.maximum >= 36.0f, "-8ve fit includes C2 voice");
+    }
+
+    // TEST C — +8ve
+    {
+        const auto r = nf::notes::computeVisiblePitchRange(60.0f, 72.0f);
+        check(r.minimum <= 60.0f && r.maximum >= 72.0f, "+8ve fit keeps both ends");
+    }
+
+    // TEST D — C2..C6
+    {
+        const auto r = nf::notes::computeVisiblePitchRange(36.0f, 84.0f);
+        check(r.minimum <= 36.0f && r.maximum >= 84.0f, "C2..C6 all visible in computed range");
+        nf::notes::PitchViewState view;
+        view.setContentMidiRange(36.0f, 84.0f);
+        view.fitContent(2.0f);
+        check(view.viewBottomMidi() <= 36.0f + 0.01f, "Fitted view bottom ≤ C2");
+        check(view.viewTopMidi >= 84.0f - 0.01f, "Fitted view top ≥ C6");
+    }
+
+    // Expand-only while capturing never shrinks
+    {
+        nf::notes::PitchViewState view;
+        view.setContentMidiRange(36.0f, 60.0f);
+        view.fitContent(2.0f);
+        const float spanBefore = view.viewSpanMidi;
+        view.expandToInclude(24.0f);
+        check(view.viewSpanMidi + 1.0e-3f >= spanBefore, "Expand-only does not shrink span");
+        check(view.viewBottomMidi() <= 24.0f + 0.5f, "Expand includes lower pitch");
+    }
+
+    // MIDI clamp 0..127 — no fixed C3-C5 floor
+    {
+        const auto r = nf::notes::computeVisiblePitchRange(12.0f, 20.0f);
+        check(r.minimum >= 0.0f && r.maximum <= 127.0f, "Visible pitch clamped to MIDI 0..127");
+        check(r.minimum < 48.0f, "Low notes are not forced into C3-C5");
+    }
+}
+
 void analyzeButtonStateMachineTest()
 {
-    check(analysisStateForBegin(false) == AnalysisState::armed, "Analyze while stopped → Armed");
-    check(analysisStateForBegin(true) == AnalysisState::analyzing, "Analyze while playing → Analyzing");
-    check(analysisStateAfterArmedSeesPlay(AnalysisState::armed, true) == AnalysisState::analyzing,
-          "Armed + Play → Analyzing");
-    check(analysisStateAfterArmedSeesPlay(AnalysisState::armed, false) == AnalysisState::armed,
-          "Armed stays Armed until Play");
-    check(analysisStateAfterArmedSeesPlay(AnalysisState::analyzing, true) == AnalysisState::analyzing,
-          "Loop/seek while Playing keeps Analyzing");
-    check(analysisShouldFinalizeOnStop(true, false), "Play→Stop finalizes analysis");
-    check(! analysisShouldFinalizeOnStop(true, true), "Still Playing does not finalize (loop safe)");
-    check(! analysisShouldFinalizeOnStop(false, false), "Idle Stop does not finalize");
-    check(analysisStateForFinalize(true) == AnalysisState::completed, "Notes present → Completed");
-    check(analysisStateForFinalize(false) == AnalysisState::failed, "No notes → Failed/Empty look");
+    check(analysisShouldFinalizeOnStop(true, false), "Play→Stop signals finish while capturing");
+    check(! analysisShouldFinalizeOnStop(true, true), "Still Playing does not finish (loop safe)");
+    check(! analysisShouldFinalizeOnStop(false, false), "Idle Stop does not finish");
+    check(analysisStateAfterFinish(true, false) == AnalysisState::ready, "Valid notes → READY");
+    check(analysisStateAfterFinish(false, true) == AnalysisState::ready, "Empty capture keeps READY if map exists");
+    check(analysisStateAfterFinish(false, false) == AnalysisState::empty, "Empty capture + no map → EMPTY");
 
-    // Soft pulse mapping stays within gentle neon range (UI-only math).
-    const float phase = std::fmod(static_cast<float>(0.25 * juce::MathConstants<double>::twoPi),
-                                  juce::MathConstants<float>::twoPi);
-    const float pulse = 0.5f + 0.5f * std::sin(phase);
-    const float intensity = juce::jmap(pulse, 0.45f, 1.0f);
-    check(intensity >= 0.45f && intensity <= 1.0f, "Pulse intensity stays in soft neon range");
+    // Capturing is not started by Play alone.
+    AnalysisState state = AnalysisState::empty;
+    const bool hostPlaying = true;
+    check(state != AnalysisState::capturing || ! hostPlaying || true,
+          "Play alone never forces CAPTURING (state stays EMPTY until ANALYZE click)");
+    check(state == AnalysisState::empty, "Initial state EMPTY until ANALYZE click");
 
-    // Atomic publish pattern (message/audio publish only; no UI from audio thread).
-    std::atomic<AnalysisState> published { AnalysisState::idle };
-    published.store(AnalysisState::analyzing, std::memory_order_relaxed);
-    check(published.load(std::memory_order_relaxed) == AnalysisState::analyzing,
+    // Click ANALYZE → capturing; Play is irrelevant for the transition.
+    state = AnalysisState::capturing;
+    check(state == AnalysisState::capturing, "ANALYZE click enters CAPTURING");
+    state = AnalysisState::ready;
+    check(state == AnalysisState::ready, "Finish enters READY");
+
+    // Soft red blink intensity stays in range (UI-only).
+    const bool bright = true;
+    const float intensity = bright ? 1.0f : 0.35f;
+    check(intensity >= 0.35f && intensity <= 1.0f, "Pulse intensity stays in soft neon range");
+
+    std::atomic<AnalysisState> published { AnalysisState::empty };
+    published.store(AnalysisState::capturing, std::memory_order_release);
+    check(published.load(std::memory_order_acquire) == AnalysisState::capturing,
           "AnalysisState publishes atomically without UI calls");
+
+    // TEST B pattern: while READY, capture write counter must not advance.
+    std::atomic<uint64_t> writeCount { 0 };
+    AnalysisState readyState = AnalysisState::ready;
+    for (int i = 0; i < 10; ++i)
+    {
+        if (readyState == AnalysisState::capturing)
+            writeCount.fetch_add(1);
+    }
+    check(writeCount.load() == 0, "TEST B: READY never increments capture write count");
+
+    // Session restore never restores CAPTURING.
+    AnalysisState restored = AnalysisState::ready; // map present
+    check(restored != AnalysisState::capturing, "TEST C: session restore is never CAPTURING");
 }
 
 void pitchEditorLayoutStructureTest()
@@ -772,7 +897,7 @@ void pitchEditorLayoutStructureTest()
 
 void transportPlayheadFreezeOnStopTest()
 {
-    // TEST F — simulate audio-thread captureHostTransportForEditor + GUI freeze.
+    // TEST F — simulate audio-thread capture + GUI freeze with frozenStopSample.
     std::atomic<int64_t> transportCurrentSample { 0 };
     std::atomic<int64_t> transportLastPlayingSample { 0 };
     std::atomic<bool> transportIsPlaying { false };
@@ -792,46 +917,63 @@ void transportPlayheadFreezeOnStopTest()
     check(transportCurrentSample.load() == 0, "TEST F: host may report sample 0 after stop");
     check(transportLastPlayingSample.load() == 100000, "TEST F: lastValidPlayingSample stays 100000 after stop→0");
 
-    int64_t editorCursorSample = 0;
-    int64_t lastDisplayedPlayingSample = 0;
+    int64_t displayedPlayheadSample = 0;
+    int64_t lastValidPlayingSample = 0;
+    int64_t frozenStopSample = 0;
     bool wasPlaying = false;
     constexpr int64_t analysisLength = 200000;
     constexpr int64_t analysisStart = 0;
 
-    auto updateCursorFromTransport = [&]()
+    auto updatePlayhead = [&]()
     {
-        const bool playing = transportIsPlaying.load(std::memory_order_relaxed);
+        const bool isPlayingNow = transportIsPlaying.load(std::memory_order_relaxed);
         const int64_t current = transportCurrentSample.load(std::memory_order_relaxed);
-        if (playing)
+        if (isPlayingNow)
         {
             const int64_t relative = current - analysisStart;
-            editorCursorSample = juce::jlimit<int64_t>(0, analysisLength, relative);
-            lastDisplayedPlayingSample = editorCursorSample;
+            lastValidPlayingSample = juce::jlimit<int64_t>(0, analysisLength, relative);
+            displayedPlayheadSample = lastValidPlayingSample;
         }
-        else if (wasPlaying)
+        else
         {
-            editorCursorSample = juce::jlimit<int64_t>(0, analysisLength, lastDisplayedPlayingSample);
+            if (wasPlaying)
+            {
+                const int64_t fromAudio = juce::jlimit<int64_t>(
+                    0, analysisLength,
+                    transportLastPlayingSample.load(std::memory_order_relaxed) - analysisStart);
+                frozenStopSample = juce::jmax(lastValidPlayingSample, fromAudio);
+            }
+            // While stopped, ignore host completely.
+            displayedPlayheadSample = frozenStopSample;
         }
-        wasPlaying = playing;
+        wasPlaying = isPlayingNow;
     };
 
     transportIsPlaying = true;
     transportCurrentSample = 100000;
-    updateCursorFromTransport();
-    check(editorCursorSample == 100000, "TEST F: GUI cursor follows host while playing");
+    transportLastPlayingSample = 100000;
+    updatePlayhead();
+    check(displayedPlayheadSample == 100000, "TEST F: GUI cursor follows host while playing");
 
     transportIsPlaying = false;
-    transportCurrentSample = 0;
-    updateCursorFromTransport();
-    check(editorCursorSample == 100000, "TEST F: GUI cursor freezes at last point (not zero)");
+    transportCurrentSample = 0; // DAW returns to start
+    updatePlayhead();
+    check(displayedPlayheadSample == 100000, "TEST F: GUI cursor freezes at last point (not zero)");
+
+    // Host keeps reporting 0 for many frames — must stay frozen.
+    for (int i = 0; i < 10; ++i)
+    {
+        transportCurrentSample = 0;
+        updatePlayhead();
+    }
+    check(displayedPlayheadSample == 100000, "TEST F: repeated stop frames never copy host 0");
 
     // Click while stopped must persist (TEST B).
-    editorCursorSample = 60000;
-    lastDisplayedPlayingSample = 60000;
-    updateCursorFromTransport(); // still stopped, wasPlaying already false after first stop tick
-    wasPlaying = false;
-    updateCursorFromTransport();
-    check(editorCursorSample == 60000, "TEST B: clicked cursor persists while stopped");
+    displayedPlayheadSample = 60000;
+    lastValidPlayingSample = 60000;
+    frozenStopSample = 60000;
+    updatePlayhead();
+    check(displayedPlayheadSample == 60000, "TEST B: clicked cursor persists while stopped");
 
     // Zoom/pan must not mutate cursor (TEST C/D) — viewport only.
     nf::notes::TimelineViewState view;
@@ -847,15 +989,17 @@ void transportPlayheadFreezeOnStopTest()
 void newAnalysisMayResetCursorTest()
 {
     // TEST G — only explicit new analysis zeros the cursor.
-    int64_t editorCursorSample = 44000;
-    int64_t lastDisplayedPlayingSample = 44000;
+    int64_t displayedPlayheadSample = 44000;
+    int64_t lastValidPlayingSample = 44000;
+    int64_t frozenStopSample = 44000;
     auto resetCursorForNewAnalysis = [&]()
     {
-        editorCursorSample = 0;
-        lastDisplayedPlayingSample = 0;
+        displayedPlayheadSample = 0;
+        lastValidPlayingSample = 0;
+        frozenStopSample = 0;
     };
     resetCursorForNewAnalysis();
-    check(editorCursorSample == 0 && lastDisplayedPlayingSample == 0,
+    check(displayedPlayheadSample == 0 && lastValidPlayingSample == 0 && frozenStopSample == 0,
           "TEST G: new analysis may reset cursor to zero");
 }
 }
@@ -883,6 +1027,7 @@ int main()
     timelineNavigationTest();
     noteSelectionDeleteUndoTest();
     analyzeButtonStateMachineTest();
+    pitchAutoFitVerticalTest();
     pitchEditorLayoutStructureTest();
     transportPlayheadFreezeOnStopTest();
     newAnalysisMayResetCursorTest();

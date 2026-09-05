@@ -1,0 +1,13 @@
+Installation finished.
+
+NF Vocal Harmonizer v1.0
+NF Audio Tools — By Nenno Fernando
+
+1. Open your DAW
+2. Rescan VST3 plug-ins
+3. Insert “NF Vocal Harmonizer” on a vocal track
+
+Manuals: ≡ menu in the plug-in header (English / Portuguese)
+
+© 2026 NF Audio Tools / Nenno Fernando
+All rights reserved.
