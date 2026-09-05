@@ -78,6 +78,7 @@ public:
     {
         double startSec = 0.0;
         double endSec = 0.0;
+        // Absolute harmony MIDI targets (legacy field names kept for binary layout clarity).
         float offsetStart = 0.0f;
         float offsetEnd = 0.0f;
     };
@@ -98,16 +99,32 @@ public:
             if (! note.isEdited())
                 continue;
 
+            // Audio thread locks to ABSOLUTE harmony MIDI (not vibrato-following auto+offset).
+            const double noteStart = note.startSec;
+            const double noteEnd = note.startSec + juce::jmax(0.02, note.durationSec);
+
             if (note.hasPitchCurve())
             {
-                for (size_t i = 1; i < note.pitchCurve.size(); ++i)
+                std::vector<PitchCurvePoint> pts;
+                pts.push_back({ noteStart, note.offsetAt(noteStart) });
+                for (const auto& pt : note.pitchCurve)
+                {
+                    if (pt.timeSec > noteStart + 1.0e-6 && pt.timeSec < noteEnd - 1.0e-6)
+                        pts.push_back(pt);
+                }
+                pts.push_back({ noteEnd, note.offsetAt(noteEnd) });
+
+                for (size_t i = 1; i < pts.size(); ++i)
                 {
                     if (n >= maxRegions)
                         break;
-                    const auto& a = note.pitchCurve[i - 1];
-                    const auto& b = note.pitchCurve[i];
-                    dest[static_cast<size_t>(n)] = { a.timeSec, b.timeSec,
-                                                     a.offsetSemitones, b.offsetSemitones };
+                    const auto& a = pts[i - 1];
+                    const auto& b = pts[i];
+                    dest[static_cast<size_t>(n)] = {
+                        a.timeSec, b.timeSec,
+                        note.autoHarmonyMidi + a.offsetSemitones,
+                        note.autoHarmonyMidi + b.offsetSemitones
+                    };
                     ++n;
                 }
             }
@@ -115,8 +132,8 @@ public:
             {
                 if (n >= maxRegions)
                     break;
-                dest[static_cast<size_t>(n)] = { note.startSec, note.startSec + note.durationSec,
-                                                 note.manualOffsetSemitones, note.manualOffsetSemitones };
+                const float absMidi = note.editedHarmonyMidi();
+                dest[static_cast<size_t>(n)] = { noteStart, noteEnd, absMidi, absMidi };
                 ++n;
             }
         }
@@ -124,7 +141,15 @@ public:
         writeIndex.store(next, std::memory_order_release);
     }
 
-    float offsetAt(double timeSec) const noexcept
+    /** True when host time falls inside a manually edited harmony region. */
+    bool hasTargetAt(double timeSec) const noexcept
+    {
+        float ignored = 0.0f;
+        return tryGetTargetMidi(timeSec, ignored);
+    }
+
+    /** Absolute harmony MIDI target for edited regions. Returns false outside edits. */
+    bool tryGetTargetMidi(double timeSec, float& outMidi) const noexcept
     {
         const int idx = writeIndex.load(std::memory_order_acquire);
         const int n = counts[idx].load(std::memory_order_relaxed);
@@ -136,13 +161,23 @@ public:
             {
                 const double span = juce::jmax(1.0e-9, r.endSec - r.startSec);
                 const float t = static_cast<float>((timeSec - r.startSec) / span);
-                return r.offsetStart + t * (r.offsetEnd - r.offsetStart);
+                outMidi = r.offsetStart + t * (r.offsetEnd - r.offsetStart);
+                return true;
             }
-            // Include exact end of last micro-segment
             if (timeSec == r.endSec)
-                return r.offsetEnd;
+            {
+                outMidi = r.offsetEnd;
+                return true;
+            }
         }
-        return 0.0f;
+        return false;
+    }
+
+    /** Absolute harmony MIDI, or 0 when no edit covers this time (legacy test helper). */
+    float offsetAt(double timeSec) const noexcept
+    {
+        float midi = 0.0f;
+        return tryGetTargetMidi(timeSec, midi) ? midi : 0.0f;
     }
 
 private:

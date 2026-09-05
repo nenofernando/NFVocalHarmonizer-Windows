@@ -126,13 +126,24 @@ bool NoteEditModel::applyFlatPencil(const juce::String& id, float offsetSemitone
     auto* note = findNote(id);
     if (note == nullptr)
         return false;
+    return applyFlatPencilAbsolute(id, note->autoHarmonyMidi + offsetSemitones, note->autoHarmonyMidi, um);
+}
+
+bool NoteEditModel::applyFlatPencilAbsolute(const juce::String& id, float absoluteMidi, float autoBaseMidi,
+                                            juce::UndoManager* um)
+{
+    auto* note = findNote(id);
+    if (note == nullptr)
+        return false;
 
     HarmonyNote before = *note;
     HarmonyNote after = *note;
-    after.manualOffsetSemitones = juce::jlimit(-24.0f, 24.0f, offsetSemitones);
+    after.autoHarmonyMidi = autoBaseMidi;
+    after.manualOffsetSemitones = juce::jlimit(-24.0f, 24.0f, absoluteMidi - autoBaseMidi);
     after.pitchCurve.clear();
 
     if (std::abs(before.manualOffsetSemitones - after.manualOffsetSemitones) < 1.0e-6f
+        && std::abs(before.autoHarmonyMidi - after.autoHarmonyMidi) < 1.0e-6f
         && before.pitchCurve.empty() && after.pitchCurve.empty())
         return false;
 
@@ -155,26 +166,47 @@ bool NoteEditModel::applySlopePencil(const juce::String& id,
     auto* note = findNote(id);
     if (note == nullptr)
         return false;
+    return applySlopePencilAbsolute(id,
+                                    t0, note->autoHarmonyMidi + offset0,
+                                    t1, note->autoHarmonyMidi + offset1,
+                                    note->autoHarmonyMidi, um);
+}
+
+bool NoteEditModel::applySlopePencilAbsolute(const juce::String& id,
+                                             double t0, float absoluteMidi0,
+                                             double t1, float absoluteMidi1,
+                                             float autoBaseMidi,
+                                             juce::UndoManager* um)
+{
+    auto* note = findNote(id);
+    if (note == nullptr)
+        return false;
 
     const double noteStart = note->startSec;
     const double noteEnd = note->startSec + juce::jmax(0.02, note->durationSec);
     double aT = juce::jlimit(noteStart, noteEnd, t0);
     double bT = juce::jlimit(noteStart, noteEnd, t1);
-    float aOff = juce::jlimit(-24.0f, 24.0f, offset0);
-    float bOff = juce::jlimit(-24.0f, 24.0f, offset1);
+    float aMidi = juce::jlimit(0.0f, 127.0f, absoluteMidi0);
+    float bMidi = juce::jlimit(0.0f, 127.0f, absoluteMidi1);
     if (bT < aT)
     {
         std::swap(aT, bT);
-        std::swap(aOff, bOff);
+        std::swap(aMidi, bMidi);
     }
     if (bT - aT < 1.0e-4)
-        return applyFlatPencil(id, 0.5f * (aOff + bOff), um);
+        return applyFlatPencilAbsolute(id, 0.5f * (aMidi + bMidi), autoBaseMidi, um);
 
     HarmonyNote before = *note;
     HarmonyNote after = *note;
+    after.autoHarmonyMidi = autoBaseMidi;
+    const float aOff = juce::jlimit(-24.0f, 24.0f, aMidi - autoBaseMidi);
+    const float bOff = juce::jlimit(-24.0f, 24.0f, bMidi - autoBaseMidi);
+    // Full-note coverage: hold endpoints outside the drawn segment.
     after.pitchCurve = {
+        { noteStart, aOff },
         { aT, aOff },
-        { bT, bOff }
+        { bT, bOff },
+        { noteEnd, bOff }
     };
     after.manualOffsetSemitones = 0.5f * (aOff + bOff);
 

@@ -281,7 +281,6 @@ void NFVocalHarmonizerAudioProcessorEditor::layoutFixedCanvas()
     content.removeFromLeft(titleControlsGap);
     auto controls = content.removeFromRight(controlsWidth);
 
-    constexpr int normalHeight = 30;
     constexpr int powerHeight = 36;
     constexpr int controlsCentreY = 31 + 6; // header origin at y=6
 

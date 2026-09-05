@@ -29,13 +29,21 @@ public:
     bool setManualOffset(const juce::String& id, float offsetSemitones, juce::UndoManager* undo);
     bool resetManualOffset(const juce::String& id, juce::UndoManager* undo);
 
-    /** Flat pencil: constant offset across the note (clears pitch curve). */
+    /** Flat pencil: constant absolute pitch across the note (clears pitch curve).
+        autoBaseMidi should be the live interval target used when the user drew. */
     bool applyFlatPencil(const juce::String& id, float offsetSemitones, juce::UndoManager* undo);
+    bool applyFlatPencilAbsolute(const juce::String& id, float absoluteMidi, float autoBaseMidi,
+                                 juce::UndoManager* undo);
     /** Slope pencil: straight line between two time/offset points. */
     bool applySlopePencil(const juce::String& id,
                           double t0, float offset0,
                           double t1, float offset1,
                           juce::UndoManager* undo);
+    bool applySlopePencilAbsolute(const juce::String& id,
+                                  double t0, float absoluteMidi0,
+                                  double t1, float absoluteMidi1,
+                                  float autoBaseMidi,
+                                  juce::UndoManager* undo);
     /** Scissors: split note at absolute time. Returns new right-hand note id, or {}. */
     juce::String splitNoteAt(const juce::String& id, double cutTimeSec, juce::UndoManager* undo);
 

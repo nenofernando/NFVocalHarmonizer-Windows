@@ -251,16 +251,17 @@ void HarmonyNoteEditor::commitPencilGesture()
     auto& um = processor.noteModel.getUndoManager();
     if (note != nullptr)
     {
+        const float autoBase = liveAutoHarmonyMidi(*note);
         if (editTool == EditTool::pencilFlat)
         {
-            processor.noteModel.applyFlatPencil(pencilNoteId, pencilOffset1, &um);
+            processor.noteModel.applyFlatPencilAbsolute(pencilNoteId, pencilMidi1, autoBase, &um);
         }
         else if (editTool == EditTool::pencilSlope)
         {
-            processor.noteModel.applySlopePencil(pencilNoteId,
-                                                pencilT0, pencilOffset0,
-                                                pencilT1, pencilOffset1,
-                                                &um);
+            processor.noteModel.applySlopePencilAbsolute(pencilNoteId,
+                                                        pencilT0, pencilMidi0,
+                                                        pencilT1, pencilMidi1,
+                                                        autoBase, &um);
         }
     }
     cancelPencilGesture();
@@ -470,6 +471,10 @@ float HarmonyNoteEditor::amplitudeAtTime(double timeSec, const nf::notes::Harmon
 
 float HarmonyNoteEditor::pitchMidiAtTime(double timeSec, const nf::notes::HarmonyNote& note, bool harmonyLane) const
 {
+    // Edited harmony notes lock to the drawn absolute pitch (flat / slope), not voice vibrato.
+    if (harmonyLane && note.isEdited())
+        return liveAutoHarmonyMidi(note) + note.offsetAt(timeSec);
+
     const float baseHarmony = harmonyDisplayMidi(note);
     const float baseVoice = note.voiceMidi;
     const float intervalShift = baseHarmony - baseVoice;
@@ -659,6 +664,28 @@ void HarmonyNoteEditor::drawVocalBlob(juce::Graphics& g, const nf::notes::Harmon
     g.setColour(curveCol.withAlpha(selected ? 1.0f : 0.90f));
     g.strokePath(pitchPath, juce::PathStrokeType(1.55f, juce::PathStrokeType::curved,
                                                  juce::PathStrokeType::rounded));
+
+    // Persistent correction guide after FLAT / LINE commit.
+    if (harmonyLane && note.isEdited())
+    {
+        juce::Path guide;
+        bool guideStarted = false;
+        for (const auto& e : edges)
+        {
+            if (! guideStarted)
+            {
+                guide.startNewSubPath(e.x, e.pitchY);
+                guideStarted = true;
+            }
+            else
+            {
+                guide.lineTo(e.x, e.pitchY);
+            }
+        }
+        g.setColour(juce::Colour::fromRGB(255, 230, 120).withAlpha(selected ? 0.95f : 0.75f));
+        g.strokePath(guide, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved,
+                                                 juce::PathStrokeType::rounded));
+    }
 }
 
 void HarmonyNoteEditor::drawSelectionHud(juce::Graphics& g) const
