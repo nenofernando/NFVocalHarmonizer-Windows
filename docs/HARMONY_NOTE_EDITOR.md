@@ -16,7 +16,8 @@
 8. Duplo clique = restaura o automático da nota. Esc = cancela arrasto/marquee ou limpa seleção.
 9. Cmd/Ctrl+Z e Shift+Cmd/Ctrl+Z (ou Ctrl+Y) = Undo/Redo.
 10. **SNAP**: KEY (padrão) / CHROMATIC / OFF — controle dentro do painel.
-11. Novo ANALYZE reconstrói notas removidas.
+11. Zoom scroll = tempo; **Option/Alt+scroll** = pan tempo; **Shift+scroll** = pan pitch; **Cmd/Ctrl+scroll** = zoom pitch (notas graves/agudas). Arrasto vazio horizontal/vertical pana. Clique posiciona o cursor; em play a timeline avança página a página com o playhead.
+12. Novo ANALYZE reconstrói notas removidas e enquadra pitch + primeira página (~8 s).
 
 ## Motor
 

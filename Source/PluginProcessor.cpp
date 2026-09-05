@@ -56,13 +56,22 @@ std::pair<int, nf::dsp::ScaleType> NFVocalHarmonizerAudioProcessor::activeKeySca
     if (apvts.getRawParameterValue(nf::params::autoKey)->load() > 0.5f)
     {
         const auto detected = engine.getDetectedScale();
-        if (detected.confidence > 0.04f)
+        if (detected.confidence > 0.20f)
         {
             root = detected.root;
             scale = detected.type;
         }
     }
     return { root, scale };
+}
+
+void NFVocalHarmonizerAudioProcessor::setParkedPlayheadSeconds(double timeSec) noexcept
+{
+    const double t = juce::jmax(0.0, timeSec);
+    parkedPlayheadSec.store(t, std::memory_order_relaxed);
+    hasParkedPlayhead.store(true, std::memory_order_relaxed);
+    if (! hostPlaying.load(std::memory_order_relaxed))
+        hostTimeSec.store(t, std::memory_order_relaxed);
 }
 
 void NFVocalHarmonizerAudioProcessor::beginAnalyzeCapture()
@@ -137,6 +146,26 @@ void NFVocalHarmonizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
             }
         }
     }
+
+    // Many hosts jump the playhead back to 0 (or cycle start) on stop.
+    // Keep the last playing position / user scrub so the editor cursor stays put.
+    if (playing)
+    {
+        lastPlayingTimeSec.store(timeSec, std::memory_order_relaxed);
+    }
+    else if (audioWasPlaying)
+    {
+        const double park = lastPlayingTimeSec.load(std::memory_order_relaxed);
+        parkedPlayheadSec.store(park, std::memory_order_relaxed);
+        hasParkedPlayhead.store(true, std::memory_order_relaxed);
+        timeSec = park;
+    }
+    else if (hasParkedPlayhead.load(std::memory_order_relaxed))
+    {
+        timeSec = parkedPlayheadSec.load(std::memory_order_relaxed);
+    }
+
+    audioWasPlaying = playing;
     hostPlaying.store(playing, std::memory_order_relaxed);
     hostTimeSec.store(timeSec, std::memory_order_relaxed);
 

@@ -26,25 +26,28 @@ void NFVocalHarmonizerAudioProcessorEditor::FixedCanvas::paint(juce::Graphics& g
                                                   static_cast<float>(designWidth),
                                                   static_cast<float>(designHeight)).reduced(3.0f),
                            9.0f, 2.0f);
+    // Header strip matches layoutFixedCanvas headerHeight (84) + top inset.
     g.setColour(juce::Colour(0xff0a0d11));
-    g.fillRect(6, 6, designWidth - 12, 64);
-    // Title locked to the absolute horizontal centre of the plugin.
-    g.setColour(juce::Colour(0xffeceff2));
-    g.setFont(juce::Font(juce::FontOptions(26.0f, juce::Font::bold)));
-    g.drawFittedText("NF Vocal Harmonizer", 0, 14, designWidth, 28, juce::Justification::centred, 1);
-    g.setColour(juce::Colour(0xffb7bec7));
-    g.setFont(juce::Font(juce::FontOptions(9.0f, juce::Font::bold)));
-    g.drawFittedText("INTELLIGENT VOCAL HARMONY", 0, 44, designWidth, 14, juce::Justification::centred, 1);
-    g.setColour(juce::Colour(cyan));
-    g.setFont(juce::Font(juce::FontOptions(15.0f, juce::Font::bold)));
-    g.drawText("NF", 26, 16, 42, 25, juce::Justification::centredLeft);
-    g.setColour(juce::Colour(0xffdce1e6));
-    g.setFont(juce::Font(juce::FontOptions(9.0f)));
-    g.drawText("AUDIO TOOLS", 27, 39, 90, 15, juce::Justification::centredLeft);
+    g.fillRect(6, 6, designWidth - 12, 84);
 
-    g.setColour(juce::Colour(0xff9aa3ad));
-    g.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
-    g.drawFittedText("v1.0", 0, designHeight - 28, designWidth, 18, juce::Justification::centred, 1);
+    // Version: footer bottom-right only (never near knob value readouts).
+    constexpr float rightMargin = 24.0f;
+    constexpr float bottomMargin = 7.0f;
+    constexpr float versionWidth = 70.0f;
+    constexpr float versionHeight = 14.0f;
+    const auto versionBounds = juce::Rectangle<float>(
+        static_cast<float>(designWidth) - rightMargin - versionWidth,
+        static_cast<float>(designHeight) - bottomMargin - versionHeight,
+        versionWidth,
+        versionHeight);
+
+    juce::String versionText (JucePlugin_VersionString);
+    if (! versionText.startsWithIgnoreCase("v"))
+        versionText = "v" + versionText;
+
+    g.setColour(juce::Colours::lightgrey.withAlpha(0.70f));
+    g.setFont(juce::Font(juce::FontOptions(9.5f)));
+    g.drawText(versionText, versionBounds, juce::Justification::centredRight, false);
 }
 
 NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFVocalHarmonizerAudioProcessor& p)
@@ -53,7 +56,8 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     setLookAndFeel(&look);
 
     constrainer.setFixedAspectRatio(static_cast<double>(designWidth) / static_cast<double>(designHeight));
-    constrainer.setSizeLimits(780, 555, 1536, 1093);
+    // Minimum width keeps the fixed 424 px header control cluster uncompressed.
+    constrainer.setSizeLimits(820, 602, 1536, 1126);
     setConstrainer(&constrainer);
     setResizable(true, true);
     setSize(defaultWidth, defaultHeight);
@@ -62,6 +66,20 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     canvas.setInterceptsMouseClicks(false, true);
     canvas.addAndMakeVisible(titleHitZone);
     titleHitZone.toFront(false);
+
+    titleLabel.setText("NF Vocal Harmonizer", juce::dontSendNotification);
+    titleLabel.setJustificationType(juce::Justification::centred);
+    titleLabel.setColour(juce::Label::textColourId, juce::Colour(0xffeceff2));
+    titleLabel.setFont(juce::Font(juce::FontOptions(26.0f, juce::Font::bold)));
+    titleLabel.setInterceptsMouseClicks(false, false);
+    canvas.addAndMakeVisible(titleLabel);
+
+    subtitleLabel.setText("INTELLIGENT VOCAL HARMONY", juce::dontSendNotification);
+    subtitleLabel.setJustificationType(juce::Justification::centred);
+    subtitleLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb7bec7));
+    subtitleLabel.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
+    subtitleLabel.setInterceptsMouseClicks(false, false);
+    canvas.addAndMakeVisible(subtitleLabel);
 
     configureKnob(harmony, "HARMONY", juce::Colour(cyan), 0, "%");
     configureKnob(formant, "FORMANT", juce::Colour(cyan), 2, " st");
@@ -90,14 +108,44 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     for (auto* c : { &keyBox, &scaleBox, &presetBox })
         canvas.addAndMakeVisible(c);
 
-    for (auto* b : { &autoKeyButton, &analyzeButton, &harmonizeButton, &powerButton, &prevButton, &nextButton,
-                     &aButton, &bButton, &copyButton, &saveButton })
-        canvas.addAndMakeVisible(b);
+    for (juce::Component* c : { static_cast<juce::Component*>(&autoKeyButton),
+                                static_cast<juce::Component*>(&analyzeButton),
+                                static_cast<juce::Component*>(&harmonizeButton),
+                                static_cast<juce::Component*>(&powerButton),
+                                static_cast<juce::Component*>(&prevButton),
+                                static_cast<juce::Component*>(&nextButton),
+                                static_cast<juce::Component*>(&aButton),
+                                static_cast<juce::Component*>(&bButton),
+                                static_cast<juce::Component*>(&copyButton),
+                                static_cast<juce::Component*>(&saveButton),
+                                static_cast<juce::Component*>(&menuButton),
+                                static_cast<juce::Component*>(&zoomOutButton),
+                                static_cast<juce::Component*>(&zoomInButton) })
+        canvas.addAndMakeVisible(c);
     autoKeyButton.setClickingTogglesState(true);
     harmonizeButton.setClickingTogglesState(true);
     powerButton.setClickingTogglesState(true);
     aButton.setClickingTogglesState(true); bButton.setClickingTogglesState(true);
     aButton.setRadioGroupId(3101); bButton.setRadioGroupId(3101); aButton.setToggleState(true, juce::dontSendNotification);
+
+    for (auto* zb : { &zoomOutButton, &zoomInButton })
+    {
+        zb->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff121820));
+        zb->setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff1a2430));
+        zb->setColour(juce::TextButton::textColourOffId, juce::Colour(0xffd7dde4));
+        zb->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+        zb->setConnectedEdges(juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
+    }
+    zoomOutButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)]
+    {
+        if (safe != nullptr)
+            safe->noteEditor.zoomTimelineOut();
+    };
+    zoomInButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)]
+    {
+        if (safe != nullptr)
+            safe->noteEditor.zoomTimelineIn();
+    };
 
     harmonizeButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff247aff));
     harmonizeButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
@@ -131,6 +179,11 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
     nextButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)] {
         if (safe == nullptr || safe->presetBox.getNumItems() == 0) return;
         safe->presetBox.setSelectedItemIndex(juce::jmin(safe->presetBox.getNumItems()-1, safe->presetBox.getSelectedItemIndex()+1), juce::sendNotification);
+    };
+    menuButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)]
+    {
+        if (safe != nullptr)
+            safe->showHeaderMenu();
     };
 
     detectedLabel.setJustificationType(juce::Justification::centred);
@@ -175,62 +228,95 @@ void NFVocalHarmonizerAudioProcessorEditor::layoutFixedCanvas()
     // Layout is locked to the design canvas. Resize only scales this composition.
     canvas.setBounds(0, 0, designWidth, designHeight);
 
-    // Header bar — compact right cluster, vertically aligned with the title line.
-    auto headerBar = juce::Rectangle<int>(6, 10, designWidth - 12, 56);
-    // Narrower strip keeps clear air after "Harmonizer".
-    auto right = headerBar.removeFromRight(252);
+    constexpr int headerHeight = 84;
+    constexpr int outerMargin = 14;
+    constexpr int controlsWidth = 424;
+    constexpr int titleControlsGap = 24;
 
-    constexpr int titleY = 14;
-    constexpr int titleH = 28;
-    constexpr int ctrlH = 24;
-    const int ctrlY = titleY + (titleH - ctrlH) / 2; // centre with "NF Vocal Harmonizer"
+    auto header = juce::Rectangle<int>(0, 6, designWidth, headerHeight);
+    auto content = header.reduced(outerMargin, 0);
 
-    auto placeRight = [&right, ctrlY](int width) -> juce::Rectangle<int>
+    // Brand block on the left (replaces NF Audio Tools). Title + subtitle share one centre axis.
+    constexpr int brandWidth = 340;
+    auto brand = content.removeFromLeft(brandWidth);
+    titleLabel.setBounds(brand.getX(), 8, brand.getWidth(), 31);
+    subtitleLabel.setBounds(brand.getX(), 40, brand.getWidth(), 16);
+    titleLabel.setJustificationType(juce::Justification::centred);
+    subtitleLabel.setJustificationType(juce::Justification::centred);
+
+    // Gap before the exclusive control cluster on the right.
+    content.removeFromLeft(titleControlsGap);
+
+    // Exclusive controls region — fixed width, left-to-right placement.
+    auto controls = content.removeFromRight(controlsWidth);
+
+    constexpr int normalHeight = 30;
+    constexpr int powerHeight = 36;
+    constexpr int controlsCentreY = 31 + 6; // header origin at y=6
+
+    auto place = [&controls](juce::Component& component, int w, int h = normalHeight)
     {
-        auto cell = right.removeFromRight(width);
-        return { cell.getX(), ctrlY, cell.getWidth(), ctrlH };
+        auto slot = controls.removeFromLeft(w);
+        component.setBounds(slot.getX(), controlsCentreY - h / 2, w, h);
     };
+    auto gap = [&controls](int amount) { controls.removeFromLeft(amount); };
 
-    powerButton.setBounds(placeRight(32).reduced(2, 1));
-    right.removeFromRight(3);
-    saveButton.setBounds(placeRight(34).reduced(1, 1));
-    copyButton.setBounds(placeRight(34).reduced(1, 1));
-    bButton.setBounds(placeRight(20).reduced(1, 1));
-    aButton.setBounds(placeRight(20).reduced(1, 1));
-    nextButton.setBounds(placeRight(16).reduced(1, 1));
-    presetBox.setBounds(placeRight(76).reduced(0, 1));
-    prevButton.setBounds(placeRight(16).reduced(1, 1));
+    place(prevButton, 26);
+    gap(4);
+    place(presetBox, 100);
+    gap(4);
+    place(nextButton, 26);
+    gap(10);
+    place(aButton, 30);
+    gap(4);
+    place(bButton, 30);
+    gap(8);
+    place(copyButton, 46);
+    gap(6);
+    place(saveButton, 46);
+    gap(8);
+    place(menuButton, 30);
+    gap(10);
+    place(powerButton, 36, powerHeight);
 
-    // Clickable title zone — restores default window size when enlarged.
-    // Keep clear of the right cluster and the NF logo on the left.
-    titleHitZone.setBounds((designWidth - 340) / 2, 10, 340, 52);
+    titleHitZone.setBounds(titleLabel.getBounds());
     titleHitZone.toFront(false);
 
     auto b = juce::Rectangle<int>(0, 0, designWidth, designHeight).reduced(18);
-    b.removeFromTop(58); // below header title/controls
+    b.removeFromTop(headerHeight); // below dedicated header
 
     constexpr int meterW = 157;
     auto leftArea = b.removeFromLeft(meterW); b.removeFromLeft(14);
     auto rightArea = b.removeFromRight(meterW); b.removeFromRight(14);
     inputMeter.setBounds(leftArea); outputMeter.setBounds(rightArea);
 
-    auto controls = b.removeFromBottom(154); b.removeFromBottom(8);
-    auto top = b.removeFromTop(95); b.removeFromTop(5);
-    auto analyze = top.removeFromRight(105); analyzeButton.setBounds(analyze.reduced(4, 28));
-    autoKeyButton.setBounds(top.removeFromLeft(90).reduced(4, 28));
-    keyBox.setBounds(top.removeFromLeft(72).reduced(3, 28));
-    scaleBox.setBounds(top.removeFromLeft(135).reduced(3, 28));
-    detectedLabel.setBounds(top.reduced(4, 27));
-    noteEditor.setBounds(b.removeFromTop(HarmonyNoteEditor::preferredPanelHeight)); b.removeFromTop(7);
+    auto knobs = b.removeFromBottom(154); b.removeFromBottom(8);
+    // Slightly tighter key/analyze strip so the editor can grow upward.
+    auto top = b.removeFromTop(82); b.removeFromTop(4);
+    auto analyze = top.removeFromRight(105); analyzeButton.setBounds(analyze.reduced(4, 22));
+    autoKeyButton.setBounds(top.removeFromLeft(90).reduced(4, 22));
+    keyBox.setBounds(top.removeFromLeft(72).reduced(3, 22));
+    scaleBox.setBounds(top.removeFromLeft(135).reduced(3, 22));
+    detectedLabel.setBounds(top.reduced(4, 21));
+    noteEditor.setBounds(b.removeFromTop(HarmonyNoteEditor::preferredPanelHeight));
+    auto zoomRow = b.removeFromTop(24);
+    b.removeFromTop(4);
+    {
+        constexpr int btn = 24;
+        auto zoomArea = zoomRow.removeFromRight(btn * 2 + 4);
+        zoomOutButton.setBounds(zoomArea.removeFromLeft(btn));
+        zoomArea.removeFromLeft(4);
+        zoomInButton.setBounds(zoomArea.removeFromLeft(btn));
+    }
     harmonizeButton.setBounds(b.removeFromBottom(62).reduced(60, 7));
     rail.setBounds(b.reduced(70, 2));
 
-    const int cell = controls.getWidth() / 5;
+    const int cell = knobs.getWidth() / 5;
     juce::Slider* sliders[] { &harmony, &formant, &humanize, &width, &mix };
     juce::Label* labels[] { &harmonyLabel, &formantLabel, &humanizeLabel, &widthLabel, &mixLabel };
     for (int i = 0; i < 5; ++i)
     {
-        auto area = controls.removeFromLeft(i == 4 ? controls.getWidth() : cell);
+        auto area = knobs.removeFromLeft(i == 4 ? knobs.getWidth() : cell);
         labels[i]->setBounds(area.removeFromTop(22));
         sliders[i]->setBounds(area.reduced(8, 0));
     }
@@ -271,8 +357,21 @@ void NFVocalHarmonizerAudioProcessorEditor::timerCallback()
     const bool autoMode = audioProcessor.apvts.getRawParameterValue(nf::params::autoKey)->load() > 0.5f;
     if (autoMode)
     {
-        const auto detected = audioProcessor.getDetectedScale(); root = detected.root; scale = detected.type;
-        detectedLabel.setText(nf::params::keyNames()[root] + "  " + (scale == nf::dsp::ScaleType::major ? "MAJOR" : "MINOR"), juce::dontSendNotification);
+        const auto detected = audioProcessor.getDetectedScale();
+        if (detected.confidence >= 0.20f)
+        {
+            root = detected.root;
+            scale = detected.type;
+            detectedLabel.setText(nf::params::keyNames()[root] + "  "
+                                      + (scale == nf::dsp::ScaleType::major ? "MAJOR" : "MINOR"),
+                                  juce::dontSendNotification);
+        }
+        else if (detectedLabel.getText().isEmpty()
+                 || detectedLabel.getText() == "DETECTING…")
+        {
+            detectedLabel.setText("DETECTING…", juce::dontSendNotification);
+        }
+        // else keep last stable key text — don't flicker while confidence is low
     }
     else detectedLabel.setText(nf::params::keyNames()[root] + "  " + nf::params::scaleNames()[static_cast<int>(scale)].toUpperCase(),
                                juce::dontSendNotification);
@@ -354,4 +453,79 @@ void NFVocalHarmonizerAudioProcessorEditor::showError(const juce::String& messag
 {
     juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
                                             "NF Vocal Harmonizer", message, "OK", this);
+}
+
+void NFVocalHarmonizerAudioProcessorEditor::openEmbeddedManual(bool portuguese)
+{
+    const char* resourceName = portuguese ? "NF_Vocal_Harmonizer_Manual_Portugues_pdf"
+                                          : "NF_Vocal_Harmonizer_User_Manual_English_pdf";
+    int dataSize = 0;
+    const char* data = BinaryData::getNamedResource(resourceName, dataSize);
+    if (data == nullptr || dataSize <= 0)
+    {
+        showError("User manual is missing from this build.");
+        return;
+    }
+
+    const auto fileName = portuguese ? "NF_Vocal_Harmonizer_Manual_Portugues.pdf"
+                                     : "NF_Vocal_Harmonizer_User_Manual_English.pdf";
+    auto dest = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                    .getChildFile("NF Audio Tools")
+                    .getChildFile("NF Vocal Harmonizer");
+    if (! dest.createDirectory() && ! dest.isDirectory())
+    {
+        showError("Could not create a temporary folder for the manual.");
+        return;
+    }
+
+    auto pdf = dest.getChildFile(fileName);
+    if (! pdf.replaceWithData(data, static_cast<size_t>(dataSize)))
+    {
+        showError("Could not write the user manual PDF.");
+        return;
+    }
+
+    if (! pdf.startAsProcess())
+        juce::Process::openDocument(pdf.getFullPathName(), {});
+}
+
+void NFVocalHarmonizerAudioProcessorEditor::showHeaderMenu()
+{
+    juce::PopupMenu menu;
+    juce::String versionText (JucePlugin_VersionString);
+    if (! versionText.startsWithIgnoreCase("v"))
+        versionText = "v" + versionText;
+    menu.addItem(1, "NF Vocal Harmonizer " + versionText, false, false);
+    menu.addSeparator();
+    menu.addItem(2, "User Manual (EN)…");
+    menu.addItem(3, juce::String::fromUTF8(u8"Manual do usuário (PT)…"));
+    menu.addSeparator();
+    menu.addItem(4, "Reset window size");
+    menu.addItem(5, "About");
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(menuButton),
+                       [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)](int result)
+                       {
+                           if (safe == nullptr)
+                               return;
+                           if (result == 2)
+                               safe->openEmbeddedManual(false);
+                           else if (result == 3)
+                               safe->openEmbeddedManual(true);
+                           else if (result == 4)
+                               safe->resetToDefaultSize();
+                           else if (result == 5)
+                               juce::AlertWindow::showMessageBoxAsync(
+                                   juce::MessageBoxIconType::InfoIcon,
+                                   "NF Vocal Harmonizer",
+                                   juce::String::fromUTF8(
+                                       u8"NF Vocal Harmonizer ")
+                                       + juce::String(JucePlugin_VersionString)
+                                       + juce::String::fromUTF8(
+                                           u8"\nNF Audio Tools / Nenno Fernando\n"
+                                           u8"VST3 · AU · AAX\n\n"
+                                           u8"© 2026 NF Audio Tools / Nenno Fernando\n"
+                                           u8"All rights reserved."),
+                                   "OK",
+                                   safe.getComponent());
+                       });
 }

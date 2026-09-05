@@ -72,5 +72,14 @@ private:
     std::atomic<float> detectedConfidence { 0.0f };
     std::atomic<bool> resetKeyRequested { false };
     std::atomic<float> inPeakL { 0.0f }, inPeakR { 0.0f }, outPeakL { 0.0f }, outPeakR { 0.0f };
+
+    // AUTO KEY hysteresis — avoid relative major/minor flicker (E maj ↔ C# min).
+    bool hasCommittedKey = false;
+    int committedRoot = 7;
+    ScaleType committedType = ScaleType::naturalMinor;
+    float committedConfidence = 0.0f;
+    int candidateRoot = 7;
+    ScaleType candidateType = ScaleType::naturalMinor;
+    int candidateHoldHops = 0;
 };
 }

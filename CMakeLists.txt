@@ -79,7 +79,9 @@ juce_add_binary_data(NFVocalHarmonizerAssets SOURCES
     assets/svg/interval_neutral.svg
     assets/svg/meter_input.svg
     assets/svg/meter_output.svg
-    assets/svg/preset_strip.svg)
+    assets/svg/preset_strip.svg
+    Manuals/pdf/NF_Vocal_Harmonizer_User_Manual_English.pdf
+    Manuals/pdf/NF_Vocal_Harmonizer_Manual_Portugues.pdf)
 
 target_sources(NFVocalHarmonizer PRIVATE
     Source/PluginProcessor.cpp

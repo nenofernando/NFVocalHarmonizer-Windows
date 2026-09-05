@@ -48,6 +48,10 @@ public:
     double getHostTimeSeconds() const noexcept { return hostTimeSec.load(std::memory_order_relaxed); }
     bool isHostPlaying() const noexcept { return hostPlaying.load(std::memory_order_relaxed); }
 
+    /** Park the editor/transport cursor while stopped (survives host returning to 0 on stop). */
+    void setParkedPlayheadSeconds(double timeSec) noexcept;
+    double getParkedPlayheadSeconds() const noexcept { return parkedPlayheadSec.load(std::memory_order_relaxed); }
+
     void captureSlot(bool slotA);
     void restoreSlot(bool slotA);
     void copySlot(bool fromA);
@@ -65,8 +69,12 @@ private:
     nf::notes::NoteCapture capture;
     juce::ValueTree slotA { "SLOT_A" }, slotB { "SLOT_B" };
     std::atomic<double> hostTimeSec { 0.0 };
+    std::atomic<double> parkedPlayheadSec { 0.0 };
+    std::atomic<double> lastPlayingTimeSec { 0.0 };
     std::atomic<bool> hostPlaying { false };
+    std::atomic<bool> hasParkedPlayhead { false };
     std::atomic<AnalysisState> analysisState { AnalysisState::idle };
-    bool wasPlaying = false;
+    bool wasPlaying = false;          // message-thread (ANALYZE finalize)
+    bool audioWasPlaying = false;     // audio-thread (cursor park on stop)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NFVocalHarmonizerAudioProcessor)
 };

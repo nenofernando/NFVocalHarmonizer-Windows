@@ -29,9 +29,21 @@ ScaleResult KeyAnalyzer::analyse() const
     static constexpr std::array<float, 12> minorProfile {
         6.33f, 2.68f, 3.52f, 5.38f, 2.60f, 3.53f, 2.54f, 4.75f, 3.98f, 2.69f, 3.34f, 3.17f };
 
+    auto isRelativePair = [](int rootA, ScaleType typeA, int rootB, ScaleType typeB) noexcept
+    {
+        if (typeA == ScaleType::major && typeB == ScaleType::naturalMinor)
+            return ((rootA + 9) % 12) == rootB;
+        if (typeA == ScaleType::naturalMinor && typeB == ScaleType::major)
+            return ((rootA + 3) % 12) == rootB;
+        return false;
+    };
+
     ScaleResult result;
     if (observationCount < 8)
+    {
+        result.confidence = -1.0f; // not enough data — callers must keep previous key
         return result;
+    }
 
     float best = -1.0f;
     float second = -1.0f;
@@ -52,21 +64,26 @@ ScaleResult KeyAnalyzer::analyse() const
                 normB += p * p;
             }
             score /= std::sqrt(normA * normB + 1.0e-12f);
+            const auto type = mode == 0 ? ScaleType::major : ScaleType::naturalMinor;
             if (score > best)
             {
-                second = best;
+                // Previous best becomes second only if it isn't the relative twin.
+                if (best >= 0.0f
+                    && ! isRelativePair(result.root, result.type, root, type))
+                    second = best;
                 best = score;
                 result.root = root;
-                result.type = mode == 0 ? ScaleType::major : ScaleType::naturalMinor;
+                result.type = type;
             }
-            else if (score > second)
+            else if (score > second
+                     && ! isRelativePair(result.root, result.type, root, type))
             {
                 second = score;
             }
         }
     }
 
-    result.confidence = juce::jlimit(0.0f, 1.0f, (best - second) * 8.0f);
+    result.confidence = juce::jlimit(0.0f, 1.0f, (best - juce::jmax(0.0f, second)) * 8.0f);
     return result;
 }
 

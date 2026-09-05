@@ -134,16 +134,43 @@ void NFLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& b, bool,
 }
 
 void NFLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, bool,
-                                 int, int, int, int, juce::ComboBox& box)
+                                 int, int, int, int, juce::ComboBox&)
 {
-    auto r = juce::Rectangle<float>(0, 0, static_cast<float>(width), static_cast<float>(height));
-    g.setColour(box.findColour(juce::ComboBox::backgroundColourId));
-    g.fillRoundedRectangle(r, 4.0f);
-    g.setColour(box.findColour(juce::ComboBox::outlineColourId));
-    g.drawRoundedRectangle(r.reduced(0.5f), 4.0f, 1.0f);
+    auto bounds = juce::Rectangle<float>(0.5f, 0.5f,
+                                         static_cast<float>(width - 1),
+                                         static_cast<float>(height - 1));
+
+    g.setColour(juce::Colour::fromRGB(11, 16, 23));
+    g.fillRoundedRectangle(bounds, 5.0f);
+
+    g.setColour(juce::Colour::fromRGB(57, 70, 84));
+    g.drawRoundedRectangle(bounds, 5.0f, 1.0f);
+
+    const float arrowX = static_cast<float>(width - 14);
+    const float arrowY = static_cast<float>(height) * 0.5f;
+
     juce::Path arrow;
-    arrow.addTriangle(width - 17.0f, height * 0.42f, width - 9.0f, height * 0.42f,
-                      width - 13.0f, height * 0.62f);
-    g.setColour(juce::Colour(0xff26ddeb)); g.fillPath(arrow);
+    arrow.startNewSubPath(arrowX - 4.0f, arrowY - 2.0f);
+    arrow.lineTo(arrowX, arrowY + 2.5f);
+    arrow.lineTo(arrowX + 4.0f, arrowY - 2.0f);
+
+    g.setColour(juce::Colour::fromRGB(30, 225, 245));
+    g.strokePath(arrow, juce::PathStrokeType(1.5f,
+                                            juce::PathStrokeType::curved,
+                                            juce::PathStrokeType::rounded));
+}
+
+void NFLookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& label)
+{
+    constexpr int symmetricPadding = 22;
+    label.setBorderSize({});
+    label.setBounds(symmetricPadding,
+                    0,
+                    juce::jmax(1, box.getWidth() - symmetricPadding * 2),
+                    box.getHeight());
+    label.setFont(getComboBoxFont(box));
+    label.setJustificationType(juce::Justification::centred);
+    label.setColour(juce::Label::textColourId, box.findColour(juce::ComboBox::textColourId));
+    label.setMinimumHorizontalScale(0.70f);
 }
 

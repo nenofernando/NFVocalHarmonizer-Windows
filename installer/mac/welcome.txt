@@ -1,5 +1,5 @@
 NF Vocal Harmonizer v1.0
-NF Audio Tools — By Neno Fernando
+NF Audio Tools / Nenno Fernando
 
 This installer places:
 • VST3 → /Library/Audio/Plug-Ins/VST3

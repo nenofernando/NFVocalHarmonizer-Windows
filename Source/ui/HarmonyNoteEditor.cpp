@@ -53,7 +53,6 @@ HarmonyNoteEditor::~HarmonyNoteEditor()
 void HarmonyNoteEditor::resized()
 {
     layout = computeLayout(getLocalBounds().toFloat());
-    // SNAP reserved in the top toolbar only — identical margins to top/right edges.
     auto bar = layout.toolbar.toNearestInt();
     snapBox.setBounds(bar.removeFromRight(110).reduced(0, 1));
     snapLabel.setBounds(bar.removeFromRight(48).reduced(0, 1));
@@ -94,7 +93,7 @@ std::pair<int, nf::dsp::ScaleType> HarmonyNoteEditor::keyScale() const
     if (processor.apvts.getRawParameterValue(nf::params::autoKey)->load() > 0.5f)
     {
         const auto detected = processor.getDetectedScale();
-        if (detected.confidence > 0.04f)
+        if (detected.confidence > 0.20f)
         {
             root = detected.root;
             scale = detected.type;
@@ -109,7 +108,9 @@ float HarmonyNoteEditor::midiToY(float midi, bool harmonyLane) const
     auto r = harmonyLane ? layout.harmonyNotes : layout.voiceNotes;
     // ≥5 px clearance under the lane header text (header is a separate rect).
     r = r.withTrimmedTop(5.0f).withTrimmedBottom(2.0f);
-    const float frac = juce::jlimit(0.0f, 1.0f, (84.0f - midi) / 36.0f);
+    const float span = juce::jmax(1.0f, pitchView.viewSpanMidi);
+    // Do not clamp: notes outside the visible pitch band fall off-screen until the user pans.
+    const float frac = (pitchView.viewTopMidi - midi) / span;
     return r.getY() + frac * juce::jmax(1.0f, r.getHeight());
 }
 
@@ -118,7 +119,56 @@ float HarmonyNoteEditor::yToMidi(float y, bool harmonyLane) const
     auto r = harmonyLane ? layout.harmonyNotes : layout.voiceNotes;
     r = r.withTrimmedTop(5.0f).withTrimmedBottom(2.0f);
     const float frac = juce::jlimit(0.0f, 1.0f, (y - r.getY()) / juce::jmax(1.0f, r.getHeight()));
-    return 84.0f - frac * 36.0f;
+    return pitchView.viewTopMidi - frac * pitchView.viewSpanMidi;
+}
+
+void HarmonyNoteEditor::drawPitchGrid(juce::Graphics& g, bool harmonyLane) const
+{
+    auto r = harmonyLane ? layout.harmonyNotes : layout.voiceNotes;
+    r = r.withTrimmedTop(5.0f).withTrimmedBottom(2.0f);
+    if (r.getHeight() < 8.0f || r.getWidth() < 8.0f)
+        return;
+
+    const float midiTop = pitchView.viewTopMidi;
+    const float midiBottom = pitchView.viewBottomMidi();
+    const float midiSpan = juce::jmax(1.0f, pitchView.viewSpanMidi);
+    const float pxPerSemi = r.getHeight() / midiSpan;
+
+    int step = 1;
+    if (pxPerSemi < 2.2f)
+        step = 2;
+    if (pxPerSemi < 1.2f)
+        step = 3;
+
+    const int midiLo = static_cast<int>(std::floor(midiBottom));
+    const int midiHi = static_cast<int>(std::ceil(midiTop));
+    for (int midi = midiLo; midi <= midiHi; ++midi)
+    {
+        const bool isOctaveC = (midi % 12) == 0;
+        const bool isWholeTone = (midi % 2) == 0;
+        if (! isOctaveC && (midi % step) != 0)
+            continue;
+
+        const float y = midiToY(static_cast<float>(midi), harmonyLane);
+        if (y < r.getY() - 0.5f || y > r.getBottom() + 0.5f)
+            continue;
+
+        if (isOctaveC)
+        {
+            g.setColour(juce::Colour(0xff3a4654));
+            g.drawLine(r.getX(), y, r.getRight(), y, 1.0f);
+        }
+        else if (step == 1 && ! isWholeTone)
+        {
+            g.setColour(juce::Colour(0xff161c24));
+            g.drawLine(r.getX(), y, r.getRight(), y, 0.6f);
+        }
+        else
+        {
+            g.setColour(juce::Colour(0xff1e2630));
+            g.drawLine(r.getX(), y, r.getRight(), y, 0.8f);
+        }
+    }
 }
 
 juce::Rectangle<float> HarmonyNoteEditor::noteBounds(const nf::notes::HarmonyNote& note, bool harmonyLane) const
@@ -132,12 +182,8 @@ juce::Rectangle<float> HarmonyNoteEditor::noteBounds(const nf::notes::HarmonyNot
     const float y = midiToY(midi, harmonyLane);
     const float noteH = 12.0f;
     auto bounds = juce::Rectangle<float>(x0, y - noteH * 0.5f, juce::jmax(4.0f, x1 - x0), noteH);
-    // Clamp vertically so blocks never enter the header strip.
-    bounds = bounds.getIntersection(lane);
-    if (bounds.isEmpty())
-        bounds = juce::Rectangle<float>(x0, lane.getCentreY() - noteH * 0.5f, juce::jmax(4.0f, x1 - x0), noteH)
-                     .getIntersection(lane);
-    return bounds;
+    // Clip to lane — notes outside the visible pitch/time window stay off-screen (no fake centre fallback).
+    return bounds.getIntersection(lane);
 }
 
 int HarmonyNoteEditor::hitTestNote(juce::Point<float> pos) const
@@ -235,35 +281,177 @@ void HarmonyNoteEditor::applyMarqueeSelection(bool additive)
     }
 }
 
+void HarmonyNoteEditor::beginMarquee(juce::Point<float> origin, bool additive)
+{
+    dragMode = DragMode::marquee;
+    shiftMarqueeAdditive = additive;
+    marqueeOrigin = origin;
+    marqueeRect = juce::Rectangle<float>(origin, origin);
+    pendingEmptyGesture = false;
+    dragId = {};
+    pitchDragNotes.clear();
+    setMouseCursor(juce::MouseCursor::CrosshairCursor);
+}
+
+void HarmonyNoteEditor::capturePitchDragSnapshot()
+{
+    pitchDragNotes.clear();
+    for (const auto& id : selectedIds)
+    {
+        auto* note = processor.noteModel.findNote(id);
+        if (note == nullptr)
+            continue;
+        pitchDragNotes.push_back({ id, note->editedHarmonyMidi(), note->manualOffsetSemitones });
+    }
+
+    // Fallback: primary drag note only (should already be in selection).
+    if (pitchDragNotes.empty() && ! dragId.isEmpty())
+    {
+        if (auto* note = processor.noteModel.findNote(dragId))
+            pitchDragNotes.push_back({ dragId, note->editedHarmonyMidi(), note->manualOffsetSemitones });
+    }
+}
+
+void HarmonyNoteEditor::applyPitchDragToSnapshot(float primaryProposedMidi)
+{
+    if (pitchDragNotes.empty())
+        return;
+
+    float primaryStart = dragStartMidi;
+    for (const auto& snap : pitchDragNotes)
+    {
+        if (snap.id == dragId)
+        {
+            primaryStart = snap.startEditedMidi;
+            break;
+        }
+    }
+    const float deltaMidi = primaryProposedMidi - primaryStart;
+
+    for (const auto& snap : pitchDragNotes)
+    {
+        auto* note = processor.noteModel.findNote(snap.id);
+        if (note == nullptr)
+            continue;
+        const float newAbs = snap.startEditedMidi + deltaMidi;
+        note->manualOffsetSemitones = newAbs - note->autoHarmonyMidi;
+    }
+    processor.noteModel.republishOffsets();
+}
+
 void HarmonyNoteEditor::refreshContentRangeFromNotes()
 {
     const auto& notes = processor.noteModel.getNotes();
     if (notes.empty())
     {
-        timelineView.setContentRange(0.0, 8.0);
+        // Avoid clamp churn every timer tick when nothing changed.
+        if (lastFittedNoteCount != 0
+            || std::abs(timelineView.contentStartSec) > 1.0e-9
+            || std::abs(timelineView.contentEndSec - 8.0) > 1.0e-9)
+        {
+            timelineView.setContentRange(0.0, 8.0);
+            pitchView.setContentMidiRange(48.0f, 84.0f);
+        }
+        const bool identityChanged = lastFittedNoteCount != 0;
+        lastFittedNoteCount = 0;
+        lastFittedContentStart = 0.0;
+        lastFittedContentEnd = 8.0;
+        lastFittedMidiMin = 48.0f;
+        lastFittedMidiMax = 84.0f;
+        if (identityChanged)
+        {
+            userNavigatedTimeline = false;
+            userNavigatedPitch = false;
+            fitViewsToNewNotesIfNeeded(true);
+        }
         return;
     }
 
     double start = notes.front().startSec;
     double end = notes.front().startSec + notes.front().durationSec;
+    float midiMin = juce::jmin(notes.front().voiceMidi, notes.front().editedHarmonyMidi());
+    float midiMax = juce::jmax(notes.front().voiceMidi, notes.front().editedHarmonyMidi());
     for (const auto& n : notes)
     {
         start = juce::jmin(start, n.startSec);
         end = juce::jmax(end, n.startSec + n.durationSec);
+        midiMin = juce::jmin(midiMin, n.voiceMidi, n.editedHarmonyMidi());
+        midiMax = juce::jmax(midiMax, n.voiceMidi, n.editedHarmonyMidi());
     }
-    timelineView.setContentRange(juce::jmax(0.0, start - 0.05), end + 0.25);
+    start = juce::jmax(0.0, start - 0.05);
+    end = end + 0.25;
+
+    // Only ANALYZE / note-set timing changes reset the camera.
+    // Pitch edits change midiMin/Max every drag frame — never treat that as a new song.
+    const bool noteSetChanged = notes.size() != lastFittedNoteCount
+                                || std::abs(start - lastFittedContentStart) > 1.0e-3
+                                || std::abs(end - lastFittedContentEnd) > 1.0e-3;
+
+    const bool timeRangeChanged = std::abs(start - timelineView.contentStartSec) > 1.0e-6
+                                  || std::abs(end - timelineView.contentEndSec) > 1.0e-6;
+    const bool midiRangeChanged = std::abs(midiMin - pitchView.contentMinMidi) > 0.02f
+                                  || std::abs(midiMax - pitchView.contentMaxMidi) > 0.02f;
+
+    if (timeRangeChanged)
+        timelineView.setContentRange(start, end);
+    if (midiRangeChanged)
+        pitchView.setContentMidiRange(midiMin, midiMax);
+
+    if (noteSetChanged)
+    {
+        lastFittedNoteCount = notes.size();
+        lastFittedContentStart = start;
+        lastFittedContentEnd = end;
+        lastFittedMidiMin = midiMin;
+        lastFittedMidiMax = midiMax;
+        userNavigatedTimeline = false;
+        userNavigatedPitch = false;
+        followPlayhead = true;
+        fitViewsToNewNotesIfNeeded(true);
+    }
+}
+
+void HarmonyNoteEditor::fitViewsToNewNotesIfNeeded(bool notesIdentityChanged)
+{
+    if (! notesIdentityChanged)
+        return;
 
     if (! userNavigatedTimeline)
     {
+        // First page (~8 s), not the whole song — otherwise pan/follow cannot work.
         timelineView.viewStartSec = timelineView.contentStartSec;
-        timelineView.viewDurationSec = timelineView.maxVisibleSec();
+        timelineView.viewDurationSec = juce::jmin(8.0, timelineView.maxVisibleSec());
+        timelineView.clampView();
+    }
+
+    if (! userNavigatedPitch)
+        pitchView.fitContent(4.0f);
+}
+
+void HarmonyNoteEditor::followPlayheadPage(double playSec)
+{
+    const double viewStart = timelineView.viewStartSec;
+    const double viewDur = juce::jmax(1.0e-6, timelineView.viewDurationSec);
+    const double viewEnd = viewStart + viewDur;
+    const double rightMargin = viewDur * 0.08; // turn page near the right edge
+    const double leftLead = viewDur * 0.08;    // after page turn, playhead sits near the left
+
+    if (playSec > viewEnd - rightMargin)
+    {
+        // Page forward so the cursor keeps walking through the material.
+        timelineView.viewStartSec = playSec - leftLead;
+        timelineView.clampView();
+    }
+    else if (playSec < viewStart)
+    {
+        timelineView.viewStartSec = playSec - leftLead;
         timelineView.clampView();
     }
 }
 
 void HarmonyNoteEditor::showZoomHud()
 {
-    zoomHudUntilMs = juce::Time::getMillisecondCounter() + 500;
+    zoomHudUntilMs = juce::Time::getMillisecondCounter() + 700;
 }
 
 void HarmonyNoteEditor::zoomTimelineAtMouse(float deltaY, float mouseX)
@@ -274,6 +462,33 @@ void HarmonyNoteEditor::zoomTimelineAtMouse(float deltaY, float mouseX)
     const double fraction = juce::jlimit(0.0, 1.0, static_cast<double>((mouseX - lane.getX()) / lane.getWidth()));
     timelineView.zoomAtFraction(deltaY, fraction);
     userNavigatedTimeline = true;
+    followPlayhead = false;
+    showZoomHud();
+}
+
+void HarmonyNoteEditor::zoomTimelineIn()
+{
+    const auto lane = getTimelineLaneBounds();
+    zoomTimelineAtMouse(0.45f, lane.getCentreX());
+    repaint();
+}
+
+void HarmonyNoteEditor::zoomTimelineOut()
+{
+    const auto lane = getTimelineLaneBounds();
+    zoomTimelineAtMouse(-0.45f, lane.getCentreX());
+    repaint();
+}
+
+void HarmonyNoteEditor::zoomPitchAtMouse(float deltaY, float mouseY)
+{
+    const auto lane = layout.notesUnion();
+    if (lane.getHeight() <= 1.0f)
+        return;
+    auto r = lane.withTrimmedTop(5.0f).withTrimmedBottom(2.0f);
+    const float frac = juce::jlimit(0.0f, 1.0f, (mouseY - r.getY()) / juce::jmax(1.0f, r.getHeight()));
+    pitchView.zoomAtFraction(deltaY, frac);
+    userNavigatedPitch = true;
     showZoomHud();
 }
 
@@ -281,6 +496,13 @@ void HarmonyNoteEditor::panTimelineFromWheel(float deltaY)
 {
     timelineView.panFromWheel(deltaY);
     userNavigatedTimeline = true;
+    followPlayhead = false;
+}
+
+void HarmonyNoteEditor::panPitchFromWheel(float deltaY)
+{
+    pitchView.panFromWheel(deltaY);
+    userNavigatedPitch = true;
 }
 
 void HarmonyNoteEditor::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
@@ -291,10 +513,29 @@ void HarmonyNoteEditor::mouseWheelMove(const juce::MouseEvent& event, const juce
         return;
     }
 
-    if (event.mods.isAltDown())
-        panTimelineFromWheel(wheel.deltaY);
+    // macOS Shift+scroll often remaps into deltaX; prefer the dominant axis.
+    float delta = wheel.deltaY;
+    if (std::abs(wheel.deltaX) > std::abs(wheel.deltaY))
+        delta = wheel.deltaX;
+    if (! std::isfinite(delta) || std::abs(delta) < 0.008f)
+        return;
+
+    // Inertial coasting after lift makes zoom/pan feel like it fights the user.
+    if (wheel.isInertial)
+        return;
+
+    // Cmd/Ctrl + scroll = pitch zoom (zoom into low/high notes).
+    // Shift + scroll = pitch pan.
+    // Alt/Option + scroll = time pan.
+    // Plain scroll = time zoom.
+    if (event.mods.isCommandDown() || event.mods.isCtrlDown())
+        zoomPitchAtMouse(delta, event.position.y);
+    else if (event.mods.isShiftDown())
+        panPitchFromWheel(delta);
+    else if (event.mods.isAltDown())
+        panTimelineFromWheel(delta);
     else
-        zoomTimelineAtMouse(wheel.deltaY, event.position.x);
+        zoomTimelineAtMouse(delta, event.position.x);
 
     repaint();
 }
@@ -324,6 +565,10 @@ void HarmonyNoteEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff1d2630));
     g.fillRect(layout.divider);
 
+    // Semitone / pitch grid behind note blocks (meio tom when the lane is tall enough).
+    drawPitchGrid(g, false);
+    drawPitchGrid(g, true);
+
     const auto notesArea = layout.notesUnion();
     if (processor.noteModel.getNotes().empty())
     {
@@ -338,21 +583,27 @@ void HarmonyNoteEditor::paint(juce::Graphics& g)
         const bool selected = isSelected(note.id);
 
         auto voice = noteBounds(note, false);
-        g.setColour(juce::Colour(0xff29e1f2).withAlpha(selected ? 0.75f : 0.55f));
-        g.fillRoundedRectangle(voice, 3.0f);
-        if (selected)
+        if (! voice.isEmpty())
         {
-            g.setColour(juce::Colours::white.withAlpha(0.85f));
-            g.drawRoundedRectangle(voice, 3.0f, 1.2f);
+            g.setColour(juce::Colour(0xff29e1f2).withAlpha(selected ? 0.75f : 0.55f));
+            g.fillRoundedRectangle(voice, 3.0f);
+            if (selected)
+            {
+                g.setColour(juce::Colours::white.withAlpha(0.85f));
+                g.drawRoundedRectangle(voice, 3.0f, 1.2f);
+            }
         }
 
         auto harm = noteBounds(note, true);
-        g.setColour(selected ? juce::Colour(0xffc56bff) : juce::Colour(0xffa34bf2).withAlpha(note.isEdited() ? 0.95f : 0.7f));
-        g.fillRoundedRectangle(harm, 3.0f);
-        if (selected)
+        if (! harm.isEmpty())
         {
-            g.setColour(juce::Colours::white.withAlpha(0.85f));
-            g.drawRoundedRectangle(harm, 3.0f, 1.2f);
+            g.setColour(selected ? juce::Colour(0xffc56bff) : juce::Colour(0xffa34bf2).withAlpha(note.isEdited() ? 0.95f : 0.7f));
+            g.fillRoundedRectangle(harm, 3.0f);
+            if (selected)
+            {
+                g.setColour(juce::Colours::white.withAlpha(0.85f));
+                g.drawRoundedRectangle(harm, 3.0f, 1.2f);
+            }
         }
     }
 
@@ -365,26 +616,34 @@ void HarmonyNoteEditor::paint(juce::Graphics& g)
         g.drawRect(box, 1.0f);
     }
 
-    const double play = processor.getHostTimeSeconds();
+    const double play = getDisplayPlayheadSeconds();
     const auto dur = juce::jmax(1.0e-9, timelineView.viewDurationSec);
     const float px = notesArea.getX()
                      + static_cast<float>((play - timelineView.viewStartSec) / dur) * notesArea.getWidth();
     if (px >= notesArea.getX() && px <= notesArea.getRight())
     {
-        g.setColour(juce::Colour(0xffedf1f4).withAlpha(0.8f));
-        g.drawLine(px, notesArea.getY(), px, notesArea.getBottom(), 1.2f);
+        g.setColour(juce::Colour(0xffedf1f4).withAlpha(hasUserPlayhead && ! processor.isHostPlaying() ? 1.0f : 0.8f));
+        g.drawLine(px, notesArea.getY(), px, notesArea.getBottom(), 1.6f);
     }
 
-    if (dragMode == DragMode::pitchEdit && tooltipText.isNotEmpty())
+    if (tooltipText.isNotEmpty()
+        && (dragMode == DragMode::pitchEdit || ! selectedIds.empty()))
     {
+        const auto font = juce::Font(juce::FontOptions(20.0f, juce::Font::bold));
+        g.setFont(font);
+        const float textW = juce::jmax(72.0f, juce::GlyphArrangement::getStringWidth(font, tooltipText) + 24.0f);
+        const float textH = 30.0f;
+        const float tipX = bounds.getCentreX() - textW * 0.5f;
+        const float tipY = layout.toolbar.getBottom() + 2.0f;
         g.setColour(juce::Colour(0xee11161f));
-        g.fillRoundedRectangle(bounds.getCentreX() - 50.0f, layout.toolbar.getBottom() + 2.0f, 100.0f, 18.0f, 4.0f);
+        g.fillRoundedRectangle(tipX, tipY, textW, textH, 6.0f);
         g.setColour(juce::Colours::white);
-        g.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
         g.drawFittedText(tooltipText,
-                         juce::roundToInt(bounds.getCentreX() - 50.0f),
-                         juce::roundToInt(layout.toolbar.getBottom() + 2.0f),
-                         100, 18, juce::Justification::centred, 1);
+                         juce::roundToInt(tipX),
+                         juce::roundToInt(tipY),
+                         juce::roundToInt(textW),
+                         juce::roundToInt(textH),
+                         juce::Justification::centred, 1);
     }
 
     if (juce::Time::getMillisecondCounter() < zoomHudUntilMs)
@@ -402,39 +661,180 @@ void HarmonyNoteEditor::paint(juce::Graphics& g)
 
 void HarmonyNoteEditor::timerCallback()
 {
-    refreshContentRangeFromNotes();
+    // Don't fight the camera while the user is actively dragging the view/notes.
+    if (dragMode != DragMode::pan && dragMode != DragMode::pitchPan
+        && dragMode != DragMode::pitchEdit)
+        refreshContentRangeFromNotes();
 
     // Drop selection ids that no longer exist (after delete / ANALYZE rebuild).
     selectedIds.erase(std::remove_if(selectedIds.begin(), selectedIds.end(),
                                      [this](const juce::String& id) { return processor.noteModel.findNote(id) == nullptr; }),
                       selectedIds.end());
 
-    const double play = processor.getHostTimeSeconds();
-    if (processor.isHostPlaying())
+    const bool playing = processor.isHostPlaying();
+    if (playing && ! editorWasPlaying)
+        followPlayhead = true; // re-enable page-follow on each transport start
+
+    // Park the scrub cursor where playback stopped (host often jumps to 0).
+    if (! playing && editorWasPlaying)
     {
-        if (play < timelineView.viewStartSec || play > timelineView.viewStartSec + timelineView.viewDurationSec * 0.92)
-        {
-            timelineView.viewStartSec = play - timelineView.viewDurationSec * 0.15;
-            timelineView.clampView();
-        }
+        userPlayheadSec = processor.getParkedPlayheadSeconds();
+        hasUserPlayhead = true;
+    }
+    editorWasPlaying = playing;
+
+    const double play = getDisplayPlayheadSeconds();
+    if (playing)
+    {
+        // Follow host while playing; keep last scrub only for the stop transition above.
+        hasUserPlayhead = false;
+        if (followPlayhead)
+            followPlayheadPage(play);
     }
 
     repaint();
 }
 
+namespace
+{
+/** Closed / grabbing fist — JUCE only exposes openHand via DraggingHandCursor on macOS. */
+juce::MouseCursor makeClosedHandCursor()
+{
+    juce::Image img(juce::Image::ARGB, 32, 32, true);
+    {
+        juce::Graphics g(img);
+        g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+        g.addTransform(juce::AffineTransform::scale(2.0f));
+
+        g.setColour(juce::Colours::black.withAlpha(0.35f));
+        g.fillEllipse(3.5f, 8.5f, 10.0f, 7.0f);
+
+        g.setColour(juce::Colours::white);
+        g.fillRoundedRectangle(3.0f, 6.5f, 10.0f, 7.5f, 2.2f);
+        g.fillRoundedRectangle(1.5f, 8.0f, 3.2f, 5.0f, 1.4f);
+        for (int i = 0; i < 4; ++i)
+            g.fillRoundedRectangle(3.5f + static_cast<float>(i) * 2.2f, 5.0f, 1.9f, 3.0f, 0.8f);
+    }
+    return juce::MouseCursor(juce::ScaledImage(img, 2.0), { 8, 8 });
+}
+}
+
+void HarmonyNoteEditor::beginTimelinePan(float mouseX)
+{
+    dragMode = DragMode::pan;
+    panDragStartX = mouseX;
+    panDragStartVisibleTime = timelineView.viewStartSec;
+    userNavigatedTimeline = true;
+    followPlayhead = false;
+    pendingEmptyGesture = false;
+}
+
+void HarmonyNoteEditor::beginPitchPan(float mouseY)
+{
+    dragMode = DragMode::pitchPan;
+    panDragStartY = mouseY;
+    panDragStartTopMidi = pitchView.viewTopMidi;
+    userNavigatedPitch = true;
+    pendingEmptyGesture = false;
+}
+
+double HarmonyNoteEditor::timeAtMouseX(float mouseX) const
+{
+    const auto lane = layout.notesUnion();
+    const double width = juce::jmax(1.0, static_cast<double>(lane.getWidth()));
+    const double frac = juce::jlimit(0.0, 1.0, static_cast<double>((mouseX - lane.getX()) / width));
+    return timelineView.timeAtFraction(frac);
+}
+
+void HarmonyNoteEditor::setPlayheadFromX(float mouseX)
+{
+    const double t = timeAtMouseX(mouseX);
+    userPlayheadSec = juce::jlimit(timelineView.contentStartSec, timelineView.contentEndSec, t);
+    hasUserPlayhead = true;
+    userNavigatedTimeline = true;
+    processor.setParkedPlayheadSeconds(userPlayheadSec);
+    // Keep the clicked page in view when scrubbing while stopped.
+    if (! processor.isHostPlaying())
+        followPlayheadPage(userPlayheadSec);
+}
+
+double HarmonyNoteEditor::getDisplayPlayheadSeconds() const
+{
+    if (processor.isHostPlaying())
+        return processor.getHostTimeSeconds();
+    if (hasUserPlayhead)
+        return userPlayheadSec;
+    return processor.getHostTimeSeconds(); // parked time while stopped
+}
+
+bool HarmonyNoteEditor::isNearPlayhead(float mouseX) const
+{
+    const auto lane = layout.notesUnion();
+    if (lane.getWidth() <= 1.0f)
+        return false;
+    const double play = getDisplayPlayheadSeconds();
+    const double dur = juce::jmax(1.0e-9, timelineView.viewDurationSec);
+    const float px = lane.getX()
+                     + static_cast<float>((play - timelineView.viewStartSec) / dur) * lane.getWidth();
+    return std::abs(mouseX - px) <= 5.0f;
+}
+
+void HarmonyNoteEditor::updateTimelineCursor(juce::Point<float> pos, bool /*altDown*/, bool dragging)
+{
+    const bool overNotes = layout.notesUnion().contains(pos);
+    const bool panning = dragging || dragMode == DragMode::pan || dragMode == DragMode::pitchPan;
+    const bool emptyForPan = overNotes && hitTestNote(pos) < 0;
+
+    if (overNotes && (panning || emptyForPan))
+    {
+        static const juce::MouseCursor closedHand = makeClosedHandCursor();
+        setMouseCursor(panning ? closedHand : juce::MouseCursor::DraggingHandCursor);
+        return;
+    }
+    setMouseCursor(juce::MouseCursor::NormalCursor);
+}
+
+void HarmonyNoteEditor::mouseMove(const juce::MouseEvent& e)
+{
+    updateTimelineCursor(e.position, e.mods.isAltDown(),
+                          dragMode == DragMode::pan || dragMode == DragMode::pitchPan);
+}
+
+void HarmonyNoteEditor::mouseEnter(const juce::MouseEvent& e)
+{
+    updateTimelineCursor(e.position, e.mods.isAltDown(),
+                          dragMode == DragMode::pan || dragMode == DragMode::pitchPan);
+}
+
+void HarmonyNoteEditor::mouseExit(const juce::MouseEvent&)
+{
+    if (dragMode != DragMode::pan && dragMode != DragMode::pitchPan)
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+}
+
 void HarmonyNoteEditor::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
+    pendingEmptyGesture = false;
 
-    // Clicks on toolbar / headers clear selection but do not start marquee or pitch edit.
-    if (layout.toolbar.contains(e.position)
-        || layout.voiceHeader.contains(e.position)
+    if (layout.toolbar.contains(e.position))
+    {
+        if (! e.mods.isShiftDown())
+            clearSelection();
+        dragMode = DragMode::none;
+        repaint();
+        return;
+    }
+
+    // Click / drag on lane headers places (and can drag) the playhead cursor.
+    if (layout.voiceHeader.contains(e.position)
         || layout.harmonyHeader.contains(e.position)
         || layout.divider.contains(e.position))
     {
         if (! e.mods.isShiftDown())
             clearSelection();
-        dragMode = DragMode::none;
+        setPlayheadFromX(e.position.x);
+        dragMode = DragMode::scrub;
         repaint();
         return;
     }
@@ -446,50 +846,146 @@ void HarmonyNoteEditor::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
+    const auto mods = e.mods;
+    const bool altHeld = mods.isAltDown()
+                         || juce::ModifierKeys::getCurrentModifiersRealtime().isAltDown();
+    const bool middle = mods.isMiddleButtonDown();
+    const bool shift = mods.isShiftDown();
+
+    // Middle-click → time pan.
+    if (middle)
+    {
+        beginTimelinePan(e.position.x);
+        updateTimelineCursor(e.position, false, true);
+        repaint();
+        return;
+    }
+
+    // Option/Alt + left drag = marquee multi-select ("lençol").
+    // Shift+Option keeps previous selection (additive).
+    if (altHeld)
+    {
+        beginMarquee(e.position, shift);
+        setMouseCursor(juce::MouseCursor::CrosshairCursor);
+        repaint();
+        return;
+    }
+
+    // Drag near the playhead line to reposition it.
+    if (! shift && isNearPlayhead(e.position.x) && hitTestNote(e.position) < 0)
+    {
+        setPlayheadFromX(e.position.x);
+        dragMode = DragMode::scrub;
+        repaint();
+        return;
+    }
+
     const int hit = hitTestNote(e.position);
-    const bool shift = e.mods.isShiftDown();
 
     if (hit >= 0)
     {
         const auto& note = processor.noteModel.getNotes()[static_cast<size_t>(hit)];
         if (shift)
         {
-            // Shift+click toggles membership; do not start pitch edit.
             toggleSelection(note.id);
             dragMode = DragMode::none;
             dragId = {};
+            pitchDragNotes.clear();
             repaint();
             return;
         }
 
-        if (! isSelected(note.id) || selectedIds.size() != 1)
+        // Clicking an unselected note selects only it; clicking inside a multi-selection keeps all.
+        if (! isSelected(note.id))
             selectOnly(note.id);
 
-        // Drag starting on a note keeps vertical pitch edit.
         dragMode = DragMode::pitchEdit;
         dragId = note.id;
         dragStartOffset = note.manualOffsetSemitones;
         dragStartMidi = note.editedHarmonyMidi();
         dragStartY = e.position.y;
         fineDrag = false;
+        capturePitchDragSnapshot();
         updateTooltip(0.0f);
         repaint();
         return;
     }
 
-    // Empty notes area: clear or prepare additive marquee.
-    if (! shift)
-        clearSelection();
-    dragMode = DragMode::marquee;
-    shiftMarqueeAdditive = shift;
-    marqueeOrigin = e.position;
-    marqueeRect = juce::Rectangle<float>(e.position, e.position);
-    dragId = {};
+    // Shift + empty drag = additive marquee.
+    if (shift)
+    {
+        beginMarquee(e.position, true);
+        repaint();
+        return;
+    }
+
+    // Empty click → place playhead; empty drag → pan time (horizontal) or pitch (vertical).
+    clearSelection();
+    pitchDragNotes.clear();
+    pendingEmptyGesture = true;
+    emptyGestureOrigin = e.position;
+    emptyGestureStartX = e.position.x;
+    emptyGestureStartY = e.position.y;
+    emptyGestureStartView = timelineView.viewStartSec;
+    emptyGestureStartTopMidi = pitchView.viewTopMidi;
+    dragMode = DragMode::none;
     repaint();
 }
 
 void HarmonyNoteEditor::mouseDrag(const juce::MouseEvent& e)
 {
+    if (pendingEmptyGesture)
+    {
+        const float dx = e.position.x - emptyGestureOrigin.x;
+        const float dy = e.position.y - emptyGestureOrigin.y;
+        const float dist = std::sqrt(dx * dx + dy * dy);
+        if (dist > 5.0f)
+        {
+            pendingEmptyGesture = false;
+            if (std::abs(dy) > std::abs(dx))
+            {
+                beginPitchPan(emptyGestureStartY);
+            }
+            else
+            {
+                beginTimelinePan(emptyGestureStartX);
+            }
+        }
+        else
+        {
+            return;
+        }
+    }
+
+    if (dragMode == DragMode::scrub)
+    {
+        setPlayheadFromX(e.position.x);
+        repaint();
+        return;
+    }
+
+    if (dragMode == DragMode::pitchPan)
+    {
+        const float laneH = juce::jmax(1.0f, layout.notesUnion().getHeight());
+        const float dragDistanceY = e.position.y - panDragStartY;
+        pitchView.panByPixelDrag(panDragStartTopMidi, dragDistanceY, laneH);
+        userNavigatedPitch = true;
+        updateTimelineCursor(e.position, false, true);
+        repaint();
+        return;
+    }
+
+    if (dragMode == DragMode::pan)
+    {
+        const double timelineWidth = juce::jmax(1.0, static_cast<double>(layout.notesUnion().getWidth()));
+        const double dragDistanceX = static_cast<double>(e.position.x - panDragStartX);
+        timelineView.panByPixelDrag(panDragStartVisibleTime, dragDistanceX, timelineWidth);
+        userNavigatedTimeline = true;
+        updateTimelineCursor(e.position, true, true);
+        repaint();
+        return;
+    }
+
     if (dragMode == DragMode::marquee)
     {
         marqueeRect = juce::Rectangle<float>(marqueeOrigin, e.position);
@@ -502,10 +998,6 @@ void HarmonyNoteEditor::mouseDrag(const juce::MouseEvent& e)
 
     fineDrag = e.mods.isShiftDown();
     const float deltaY = dragStartY - e.position.y;
-    auto* note = processor.noteModel.findNote(dragId);
-    if (note == nullptr)
-        return;
-
     const auto ks = keyScale();
     float proposedAbsolute = dragStartMidi;
     if (fineDrag)
@@ -523,15 +1015,40 @@ void HarmonyNoteEditor::mouseDrag(const juce::MouseEvent& e)
         proposedAbsolute = processor.noteModel.quantizeAbsoluteMidi(proposedAbsolute, ks.first, ks.second);
     }
 
-    const float newOffset = proposedAbsolute - note->autoHarmonyMidi;
-    note->manualOffsetSemitones = juce::jlimit(-24.0f, 24.0f, newOffset);
-    processor.noteModel.republishOffsets();
-    updateTooltip(note->manualOffsetSemitones - dragStartOffset);
+    applyPitchDragToSnapshot(proposedAbsolute);
+    if (auto* note = processor.noteModel.findNote(dragId))
+        tooltipText = formatOffsetTooltip(note->manualOffsetSemitones);
     repaint();
 }
 
-void HarmonyNoteEditor::mouseUp(const juce::MouseEvent&)
+void HarmonyNoteEditor::mouseUp(const juce::MouseEvent& e)
 {
+    if (pendingEmptyGesture)
+    {
+        pendingEmptyGesture = false;
+        setPlayheadFromX(e.position.x);
+        dragMode = DragMode::none;
+        updateTimelineCursor(e.position, e.mods.isAltDown(), false);
+        repaint();
+        return;
+    }
+
+    if (dragMode == DragMode::scrub)
+    {
+        setPlayheadFromX(e.position.x);
+        dragMode = DragMode::none;
+        repaint();
+        return;
+    }
+
+    if (dragMode == DragMode::pan || dragMode == DragMode::pitchPan)
+    {
+        dragMode = DragMode::none;
+        updateTimelineCursor(e.position, e.mods.isAltDown(), false);
+        repaint();
+        return;
+    }
+
     if (dragMode == DragMode::marquee)
     {
         applyMarqueeSelection(shiftMarqueeAdditive);
@@ -547,6 +1064,9 @@ void HarmonyNoteEditor::mouseUp(const juce::MouseEvent&)
 
 void HarmonyNoteEditor::mouseDoubleClick(const juce::MouseEvent& e)
 {
+    if (e.mods.isAltDown())
+        return;
+
     const int hit = hitTestNote(e.position);
     if (hit < 0)
         return;
@@ -567,7 +1087,33 @@ void HarmonyNoteEditor::updateTooltip(float)
 
 void HarmonyNoteEditor::commitPitchDrag(bool apply)
 {
-    if (! dragId.isEmpty())
+    if (! pitchDragNotes.empty())
+    {
+        if (apply)
+        {
+            auto& um = processor.noteModel.getUndoManager();
+            um.beginNewTransaction(pitchDragNotes.size() > 1 ? "Edit harmony notes" : "Edit harmony note");
+            for (const auto& snap : pitchDragNotes)
+            {
+                auto* note = processor.noteModel.findNote(snap.id);
+                if (note == nullptr)
+                    continue;
+                const float finalOffset = note->manualOffsetSemitones;
+                note->manualOffsetSemitones = snap.startOffset;
+                processor.noteModel.setManualOffset(snap.id, finalOffset, &um);
+            }
+        }
+        else
+        {
+            for (const auto& snap : pitchDragNotes)
+            {
+                if (auto* note = processor.noteModel.findNote(snap.id))
+                    note->manualOffsetSemitones = snap.startOffset;
+            }
+            processor.noteModel.republishOffsets();
+        }
+    }
+    else if (! dragId.isEmpty())
     {
         if (auto* note = processor.noteModel.findNote(dragId))
         {
@@ -586,8 +1132,58 @@ void HarmonyNoteEditor::commitPitchDrag(bool apply)
     }
     dragMode = DragMode::none;
     dragId = {};
+    pitchDragNotes.clear();
     tooltipText.clear();
     repaint();
+}
+
+void HarmonyNoteEditor::nudgeSelectedPitch(int direction, bool fineCents)
+{
+    if (selectedIds.empty() || direction == 0)
+        return;
+    if (dragMode == DragMode::pitchEdit || dragMode == DragMode::marquee
+        || dragMode == DragMode::pan || dragMode == DragMode::pitchPan
+        || dragMode == DragMode::scrub)
+        return;
+
+    const auto ks = keyScale();
+    bool changed = false;
+
+    for (const auto& id : selectedIds)
+    {
+        auto* note = processor.noteModel.findNote(id);
+        if (note == nullptr)
+            continue;
+
+        float proposed = note->editedHarmonyMidi();
+        if (fineCents)
+        {
+            proposed += static_cast<float>(direction) * 0.01f;
+            if (processor.noteModel.getSnapMode() != nf::notes::SnapMode::off)
+                proposed = processor.noteModel.quantizeAbsoluteMidi(proposed, ks.first, ks.second);
+            else
+                proposed = std::round(proposed * 100.0f) / 100.0f;
+        }
+        else
+        {
+            proposed += static_cast<float>(direction);
+            if (processor.noteModel.getSnapMode() != nf::notes::SnapMode::off)
+                proposed = processor.noteModel.quantizeAbsoluteMidi(proposed, ks.first, ks.second);
+            else
+                proposed = std::round(proposed);
+        }
+
+        const float newOffset = juce::jlimit(-24.0f, 24.0f, proposed - note->autoHarmonyMidi);
+        if (processor.noteModel.setManualOffset(id, newOffset, &processor.noteModel.getUndoManager()))
+        {
+            changed = true;
+            tooltipText = formatOffsetTooltip(newOffset);
+            dragId = id; // so updateTooltip path stays consistent if needed
+        }
+    }
+
+    if (changed)
+        repaint();
 }
 
 bool HarmonyNoteEditor::keyPressed(const juce::KeyPress& key)
@@ -597,6 +1193,18 @@ bool HarmonyNoteEditor::keyPressed(const juce::KeyPress& key)
         // Consume even with empty selection so Delete never reaches the DAW.
         deleteSelectedNotesFromEditor();
         return true;
+    }
+
+    if (key == juce::KeyPress::upKey || key == juce::KeyPress::downKey)
+    {
+        const int dir = (key == juce::KeyPress::upKey) ? 1 : -1;
+        const bool fine = key.getModifiers().isShiftDown();
+        if (! selectedIds.empty())
+        {
+            nudgeSelectedPitch(dir, fine);
+            return true;
+        }
+        return true; // consume so the DAW does not steal arrow keys while editor focused
     }
 
     if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown())
@@ -615,14 +1223,18 @@ bool HarmonyNoteEditor::keyPressed(const juce::KeyPress& key)
             commitPitchDrag(false);
             return true;
         }
-        if (dragMode == DragMode::marquee)
+        if (dragMode == DragMode::marquee || dragMode == DragMode::pan
+            || dragMode == DragMode::pitchPan || dragMode == DragMode::scrub)
         {
             dragMode = DragMode::none;
+            pendingEmptyGesture = false;
             marqueeRect = {};
+            setMouseCursor(juce::MouseCursor::NormalCursor);
             repaint();
             return true;
         }
         clearSelection();
+        tooltipText.clear();
         repaint();
         return true;
     }

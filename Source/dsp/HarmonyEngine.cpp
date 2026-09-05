@@ -45,6 +45,13 @@ void HarmonyEngine::reset()
     detectedRoot.store(7); detectedType.store(static_cast<int>(ScaleType::naturalMinor)); detectedConfidence.store(0.0f);
     resetKeyRequested.store(false);
     inPeakL.store(0.0f); inPeakR.store(0.0f); outPeakL.store(0.0f); outPeakR.store(0.0f);
+    hasCommittedKey = false;
+    committedRoot = 7;
+    committedType = ScaleType::naturalMinor;
+    committedConfidence = 0.0f;
+    candidateRoot = 7;
+    candidateType = ScaleType::naturalMinor;
+    candidateHoldHops = 0;
 }
 
 float HarmonyEngine::nextRandomBipolar() noexcept
@@ -90,6 +97,9 @@ void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySetti
     {
         keyAnalyzer.reset();
         detectedConfidence.store(0.0f, std::memory_order_relaxed);
+        hasCommittedKey = false;
+        committedConfidence = 0.0f;
+        candidateHoldHops = 0;
     }
     const int channels = juce::jmin(buffer.getNumChannels(), 2);
     const int samples = buffer.getNumSamples();
@@ -100,10 +110,11 @@ void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySetti
     int activeRoot = s.key;
     auto activeScale = s.scale;
 
+    constexpr float kAutoKeyUseConfidence = 0.20f;
     if (s.autoKey)
     {
         const auto detected = getDetectedScale();
-        if (detected.confidence > 0.04f)
+        if (detected.confidence > kAutoKeyUseConfidence)
         {
             activeRoot = detected.root;
             activeScale = detected.type;
@@ -157,13 +168,99 @@ void HarmonyEngine::process(juce::AudioBuffer<float>& buffer, const HarmonySetti
                 if (s.autoKey)
                 {
                     const auto result = keyAnalyzer.analyse();
-                    detectedRoot.store(result.root, std::memory_order_relaxed);
-                    detectedType.store(static_cast<int>(result.type), std::memory_order_relaxed);
-                    detectedConfidence.store(result.confidence, std::memory_order_relaxed);
-                    if (result.confidence > 0.04f)
+                    if (result.confidence >= 0.0f)
                     {
-                        activeRoot = result.root;
-                        activeScale = result.type;
+                        auto isRelative = [](int rootA, ScaleType typeA, int rootB, ScaleType typeB) noexcept
+                        {
+                            if (typeA == ScaleType::major && typeB == ScaleType::naturalMinor)
+                                return ((rootA + 9) % 12) == rootB;
+                            if (typeA == ScaleType::naturalMinor && typeB == ScaleType::major)
+                                return ((rootA + 3) % 12) == rootB;
+                            return false;
+                        };
+
+                        constexpr float minCommitConf = 0.18f;
+                        constexpr float switchMargin = 0.10f;
+                        constexpr int hopsToSwitch = 40; // ~350 ms @ ~8.7 ms hop
+
+                        if (! hasCommittedKey)
+                        {
+                            if (result.confidence >= minCommitConf)
+                            {
+                                hasCommittedKey = true;
+                                committedRoot = result.root;
+                                committedType = result.type;
+                                committedConfidence = result.confidence;
+                                candidateHoldHops = 0;
+                            }
+                        }
+                        else if (result.root == committedRoot && result.type == committedType)
+                        {
+                            committedConfidence = juce::jmax(committedConfidence * 0.92f, result.confidence);
+                            candidateHoldHops = 0;
+                        }
+                        else if (isRelative(committedRoot, committedType, result.root, result.type))
+                        {
+                            // Relative major/minor share pitch classes — keep mode unless much stronger.
+                            if (result.confidence > committedConfidence + switchMargin * 1.5f)
+                            {
+                                if (candidateRoot == result.root && candidateType == result.type)
+                                    ++candidateHoldHops;
+                                else
+                                {
+                                    candidateRoot = result.root;
+                                    candidateType = result.type;
+                                    candidateHoldHops = 1;
+                                }
+                                if (candidateHoldHops >= hopsToSwitch)
+                                {
+                                    committedRoot = result.root;
+                                    committedType = result.type;
+                                    committedConfidence = result.confidence;
+                                    candidateHoldHops = 0;
+                                }
+                            }
+                            else
+                            {
+                                candidateHoldHops = 0;
+                                committedConfidence = juce::jmax(committedConfidence * 0.98f, result.confidence * 0.85f);
+                            }
+                        }
+                        else if (result.confidence >= minCommitConf
+                                 && result.confidence > committedConfidence + switchMargin)
+                        {
+                            if (candidateRoot == result.root && candidateType == result.type)
+                                ++candidateHoldHops;
+                            else
+                            {
+                                candidateRoot = result.root;
+                                candidateType = result.type;
+                                candidateHoldHops = 1;
+                            }
+                            if (candidateHoldHops >= hopsToSwitch)
+                            {
+                                committedRoot = result.root;
+                                committedType = result.type;
+                                committedConfidence = result.confidence;
+                                candidateHoldHops = 0;
+                            }
+                        }
+                        else
+                        {
+                            candidateHoldHops = 0;
+                        }
+
+                        if (hasCommittedKey)
+                        {
+                            detectedRoot.store(committedRoot, std::memory_order_relaxed);
+                            detectedType.store(static_cast<int>(committedType), std::memory_order_relaxed);
+                            detectedConfidence.store(committedConfidence, std::memory_order_relaxed);
+                            if (committedConfidence > kAutoKeyUseConfidence)
+                            {
+                                activeRoot = committedRoot;
+                                activeScale = committedType;
+                            }
+                        }
                     }
                 }
 

@@ -86,9 +86,14 @@ productbuild \
 DMG_STAGING="$WORK/dmg"
 mkdir -p "$DMG_STAGING"
 cp "$WORK/NF Vocal Harmonizer Installer.pkg" "$DMG_STAGING/"
+mkdir -p "$DMG_STAGING/Manuals"
+if [[ -f "$ROOT_DIR/Manuals/pdf/NF_Vocal_Harmonizer_User_Manual_English.pdf" ]]; then
+  cp "$ROOT_DIR/Manuals/pdf/NF_Vocal_Harmonizer_User_Manual_English.pdf" "$DMG_STAGING/Manuals/"
+  cp "$ROOT_DIR/Manuals/pdf/NF_Vocal_Harmonizer_Manual_Portugues.pdf" "$DMG_STAGING/Manuals/"
+fi
 cat > "$DMG_STAGING/Read Me.txt" <<'EOF'
 NF Vocal Harmonizer v1.0
-NF Audio Tools — By Neno Fernando
+NF Audio Tools / Nenno Fernando
 
 1. Open "NF Vocal Harmonizer Installer.pkg"
 2. Keep VST3, AU and AAX selected
@@ -100,7 +105,12 @@ Install paths:
 • AU   → /Library/Audio/Plug-Ins/Components
 • AAX  → /Library/Application Support/Avid/Audio/Plug-Ins
 
-Built with Avid AAX SDK 2.9.0 (same toolchain as NF Vocal Verb).
+User manuals (EN / PT) are embedded in the plugin.
+Open them from the ≡ menu in the header.
+Timeline pan: Option/Alt + drag (or Option/Alt + scroll).
+
+Built with Avid AAX SDK 2.9.0.
+© 2026 NF Audio Tools / Nenno Fernando
 EOF
 
 hdiutil create -volname "$PLUGIN_NAME" -srcfolder "$DMG_STAGING" -ov -format UDZO \
