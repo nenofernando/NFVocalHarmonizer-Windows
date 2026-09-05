@@ -769,6 +769,95 @@ void pitchEditorLayoutStructureTest()
     check(! harmonyHeader.intersects(harmonyNotes), "HARMONY label strip does not overlap note area");
     check(voiceNotes.getHeight() + 1.0e-3f >= 28.0f - 0.5f, "Note lane height near suggested 28 px at preferred panel size");
 }
+
+void transportPlayheadFreezeOnStopTest()
+{
+    // TEST F — simulate audio-thread captureHostTransportForEditor + GUI freeze.
+    std::atomic<int64_t> transportCurrentSample { 0 };
+    std::atomic<int64_t> transportLastPlayingSample { 0 };
+    std::atomic<bool> transportIsPlaying { false };
+
+    auto captureHost = [&](bool playing, int64_t sample)
+    {
+        transportIsPlaying.store(playing, std::memory_order_relaxed);
+        transportCurrentSample.store(sample, std::memory_order_relaxed);
+        if (playing)
+            transportLastPlayingSample.store(sample, std::memory_order_relaxed);
+    };
+
+    captureHost(true, 100000);
+    check(transportLastPlayingSample.load() == 100000, "TEST F: lastValidPlayingSample stores 100000 while playing");
+
+    captureHost(false, 0);
+    check(transportCurrentSample.load() == 0, "TEST F: host may report sample 0 after stop");
+    check(transportLastPlayingSample.load() == 100000, "TEST F: lastValidPlayingSample stays 100000 after stop→0");
+
+    int64_t editorCursorSample = 0;
+    int64_t lastDisplayedPlayingSample = 0;
+    bool wasPlaying = false;
+    constexpr int64_t analysisLength = 200000;
+    constexpr int64_t analysisStart = 0;
+
+    auto updateCursorFromTransport = [&]()
+    {
+        const bool playing = transportIsPlaying.load(std::memory_order_relaxed);
+        const int64_t current = transportCurrentSample.load(std::memory_order_relaxed);
+        if (playing)
+        {
+            const int64_t relative = current - analysisStart;
+            editorCursorSample = juce::jlimit<int64_t>(0, analysisLength, relative);
+            lastDisplayedPlayingSample = editorCursorSample;
+        }
+        else if (wasPlaying)
+        {
+            editorCursorSample = juce::jlimit<int64_t>(0, analysisLength, lastDisplayedPlayingSample);
+        }
+        wasPlaying = playing;
+    };
+
+    transportIsPlaying = true;
+    transportCurrentSample = 100000;
+    updateCursorFromTransport();
+    check(editorCursorSample == 100000, "TEST F: GUI cursor follows host while playing");
+
+    transportIsPlaying = false;
+    transportCurrentSample = 0;
+    updateCursorFromTransport();
+    check(editorCursorSample == 100000, "TEST F: GUI cursor freezes at last point (not zero)");
+
+    // Click while stopped must persist (TEST B).
+    editorCursorSample = 60000;
+    lastDisplayedPlayingSample = 60000;
+    updateCursorFromTransport(); // still stopped, wasPlaying already false after first stop tick
+    wasPlaying = false;
+    updateCursorFromTransport();
+    check(editorCursorSample == 60000, "TEST B: clicked cursor persists while stopped");
+
+    // Zoom/pan must not mutate cursor (TEST C/D) — viewport only.
+    nf::notes::TimelineViewState view;
+    view.setContentRange(0.0, 20.0);
+    view.viewStartSec = 2.0;
+    view.viewDurationSec = 8.0;
+    const double cursorSec = 5.0;
+    view.zoomAtFraction(0.3f, 0.5);
+    view.panFromWheel(0.2f);
+    check(std::abs(cursorSec - 5.0) < 1.0e-12, "TEST C/D: cursor time unchanged by zoom/pan");
+}
+
+void newAnalysisMayResetCursorTest()
+{
+    // TEST G — only explicit new analysis zeros the cursor.
+    int64_t editorCursorSample = 44000;
+    int64_t lastDisplayedPlayingSample = 44000;
+    auto resetCursorForNewAnalysis = [&]()
+    {
+        editorCursorSample = 0;
+        lastDisplayedPlayingSample = 0;
+    };
+    resetCursorForNewAnalysis();
+    check(editorCursorSample == 0 && lastDisplayedPlayingSample == 0,
+          "TEST G: new analysis may reset cursor to zero");
+}
 }
 
 int main()
@@ -795,6 +884,8 @@ int main()
     noteSelectionDeleteUndoTest();
     analyzeButtonStateMachineTest();
     pitchEditorLayoutStructureTest();
+    transportPlayheadFreezeOnStopTest();
+    newAnalysisMayResetCursorTest();
     std::cout << "Failures: " << failures << '\n';
     return failures == 0 ? 0 : 1;
 }

@@ -21,6 +21,7 @@ void NFVocalHarmonizerAudioProcessor::prepareToPlay(double sr, int block)
     engine.prepare(sr, block, getTotalNumOutputChannels());
     setLatencySamples(engine.getLatencySamples());
     capture.ring().reset();
+    transportSampleRate.store(sr > 0.0 ? sr : 44100.0, std::memory_order_relaxed);
 }
 
 void NFVocalHarmonizerAudioProcessor::releaseResources() { engine.reset(); }
@@ -65,25 +66,162 @@ std::pair<int, nf::dsp::ScaleType> NFVocalHarmonizerAudioProcessor::activeKeySca
     return { root, scale };
 }
 
-void NFVocalHarmonizerAudioProcessor::setParkedPlayheadSeconds(double timeSec) noexcept
+void NFVocalHarmonizerAudioProcessor::captureHostTransportForEditor() noexcept
 {
-    const double t = juce::jmax(0.0, timeSec);
-    parkedPlayheadSec.store(t, std::memory_order_relaxed);
-    hasParkedPlayhead.store(true, std::memory_order_relaxed);
-    if (! hostPlaying.load(std::memory_order_relaxed))
-        hostTimeSec.store(t, std::memory_order_relaxed);
+    transportSampleRate.store(getSampleRate() > 0.0 ? getSampleRate() : 44100.0,
+                              std::memory_order_relaxed);
+
+    auto* playHead = getPlayHead();
+    if (playHead == nullptr)
+    {
+        transportPositionValid.store(false, std::memory_order_release);
+        return;
+    }
+
+    const auto position = playHead->getPosition();
+    if (! position.hasValue())
+    {
+        transportPositionValid.store(false, std::memory_order_release);
+        return;
+    }
+
+    const bool playing = position->getIsPlaying();
+    const auto optionalSample = position->getTimeInSamples();
+
+    // Odd revision = write in progress; even = stable.
+    transportRevision.fetch_add(1, std::memory_order_acq_rel);
+
+    transportIsPlaying.store(playing, std::memory_order_relaxed);
+
+    if (optionalSample.hasValue())
+    {
+        const int64_t sample = juce::jmax<int64_t>(0, *optionalSample);
+        transportCurrentSample.store(sample, std::memory_order_relaxed);
+        transportPositionValid.store(true, std::memory_order_relaxed);
+
+        // CRITICAL: only update last valid point while playing.
+        // If the DAW stops and returns zero, this field stays frozen.
+        if (playing)
+            transportLastPlayingSample.store(sample, std::memory_order_relaxed);
+    }
+    else
+    {
+        // Fallback: seconds → samples when host omits sample position.
+        if (auto seconds = position->getTimeInSeconds())
+        {
+            const double sr = transportSampleRate.load(std::memory_order_relaxed);
+            const int64_t sample = juce::jmax<int64_t>(
+                0, static_cast<int64_t>(std::llround(*seconds * sr)));
+            transportCurrentSample.store(sample, std::memory_order_relaxed);
+            transportPositionValid.store(true, std::memory_order_relaxed);
+            if (playing)
+                transportLastPlayingSample.store(sample, std::memory_order_relaxed);
+        }
+        else
+        {
+            transportPositionValid.store(false, std::memory_order_relaxed);
+        }
+    }
+
+    transportRevision.fetch_add(1, std::memory_order_release);
+}
+
+NFVocalHarmonizerAudioProcessor::TransportSnapshot
+NFVocalHarmonizerAudioProcessor::getTransportSnapshot() const noexcept
+{
+    TransportSnapshot result;
+
+    for (int attempt = 0; attempt < 4; ++attempt)
+    {
+        const auto before = transportRevision.load(std::memory_order_acquire);
+        if ((before & 1u) != 0u)
+            continue;
+
+        result.currentHostSample = transportCurrentSample.load(std::memory_order_relaxed);
+        result.lastValidPlayingSample = transportLastPlayingSample.load(std::memory_order_relaxed);
+        result.analysisStartHostSample = transportAnalysisStartSample.load(std::memory_order_relaxed);
+        result.sampleRate = transportSampleRate.load(std::memory_order_relaxed);
+        result.isPlaying = transportIsPlaying.load(std::memory_order_relaxed);
+        result.hasValidHostPosition = transportPositionValid.load(std::memory_order_relaxed);
+
+        const auto after = transportRevision.load(std::memory_order_acquire);
+        if (before == after && (after & 1u) == 0u)
+        {
+            result.revision = after;
+            return result;
+        }
+    }
+
+    result.currentHostSample = transportCurrentSample.load(std::memory_order_relaxed);
+    result.lastValidPlayingSample = transportLastPlayingSample.load(std::memory_order_relaxed);
+    result.analysisStartHostSample = transportAnalysisStartSample.load(std::memory_order_relaxed);
+    result.sampleRate = transportSampleRate.load(std::memory_order_relaxed);
+    result.isPlaying = transportIsPlaying.load(std::memory_order_relaxed);
+    result.hasValidHostPosition = transportPositionValid.load(std::memory_order_relaxed);
+    result.revision = transportRevision.load(std::memory_order_acquire);
+    return result;
+}
+
+void NFVocalHarmonizerAudioProcessor::markAnalysisStartFromCurrentTransport() noexcept
+{
+    const auto snapshot = getTransportSnapshot();
+
+    int64_t start = snapshot.currentHostSample;
+    if (! snapshot.hasValidHostPosition)
+        start = snapshot.lastValidPlayingSample;
+
+    transportAnalysisStartSample.store(juce::jmax<int64_t>(0, start),
+                                       std::memory_order_release);
+}
+
+void NFVocalHarmonizerAudioProcessor::clearAnalysisTransportState() noexcept
+{
+    transportCurrentSample.store(0, std::memory_order_relaxed);
+    transportLastPlayingSample.store(0, std::memory_order_relaxed);
+    transportAnalysisStartSample.store(0, std::memory_order_relaxed);
+    transportIsPlaying.store(false, std::memory_order_relaxed);
+    transportPositionValid.store(false, std::memory_order_relaxed);
+    transportRevision.fetch_add(2, std::memory_order_release);
+}
+
+double NFVocalHarmonizerAudioProcessor::getHostTimeSeconds() const noexcept
+{
+    const auto snap = getTransportSnapshot();
+    const double sr = juce::jmax(1.0, snap.sampleRate);
+    return static_cast<double>(snap.currentHostSample) / sr;
+}
+
+bool NFVocalHarmonizerAudioProcessor::isHostPlaying() const noexcept
+{
+    return transportIsPlaying.load(std::memory_order_relaxed);
+}
+
+void NFVocalHarmonizerAudioProcessor::setEditorCursorSecondsForState(double seconds) noexcept
+{
+    editorCursorSecondsForState.store(juce::jmax(0.0, seconds), std::memory_order_relaxed);
+}
+
+double NFVocalHarmonizerAudioProcessor::getEditorCursorSecondsForState() const noexcept
+{
+    return editorCursorSecondsForState.load(std::memory_order_relaxed);
+}
+
+double NFVocalHarmonizerAudioProcessor::takePendingEditorCursorSeconds() noexcept
+{
+    return pendingEditorCursorSeconds.exchange(-1.0, std::memory_order_acq_rel);
 }
 
 void NFVocalHarmonizerAudioProcessor::beginAnalyzeCapture()
 {
+    markAnalysisStartFromCurrentTransport();
+
     noteModel.clear();
     capture.clearRaw();
     capture.ring().reset();
     capture.setArmed(true);
     engine.resetKeyAnalysis();
 
-    // Clear any previous completed/failed visual before arming again.
-    const bool playing = hostPlaying.load(std::memory_order_relaxed);
+    const bool playing = isHostPlaying();
     analysisState.store(analysisStateForBegin(playing), std::memory_order_relaxed);
     wasPlaying = playing;
 }
@@ -102,19 +240,17 @@ void NFVocalHarmonizerAudioProcessor::finalizeAnalyzeCapture()
 
 void NFVocalHarmonizerAudioProcessor::timerCallback()
 {
-    const bool playing = hostPlaying.load(std::memory_order_relaxed);
+    const bool playing = isHostPlaying();
     const auto state = analysisState.load(std::memory_order_relaxed);
 
     if (capture.isArmed())
     {
         capture.drainRing();
 
-        // Armed + host starts playing → analyzing (spacebar / transport button).
         const auto next = analysisStateAfterArmedSeesPlay(state, playing);
         if (next != state)
             analysisState.store(next, std::memory_order_relaxed);
 
-        // Play → Stop finalizes. Loop/seek while still playing must not finalize.
         if (analysisShouldFinalizeOnStop(wasPlaying, playing))
             finalizeAnalyzeCapture();
     }
@@ -125,49 +261,17 @@ void NFVocalHarmonizerAudioProcessor::timerCallback()
 void NFVocalHarmonizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals guard;
+
+    captureHostTransportForEditor();
+
     for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
         buffer.clear(ch, 0, buffer.getNumSamples());
 
-    double timeSec = hostTimeSec.load(std::memory_order_relaxed);
-    bool playing = false;
-    if (auto* playHead = getPlayHead())
-    {
-        if (auto pos = playHead->getPosition())
-        {
-            playing = pos->getIsPlaying();
-            if (auto samples = pos->getTimeInSamples())
-            {
-                const double sr = getSampleRate() > 0.0 ? getSampleRate() : 44100.0;
-                timeSec = static_cast<double>(*samples) / sr;
-            }
-            else if (auto seconds = pos->getTimeInSeconds())
-            {
-                timeSec = *seconds;
-            }
-        }
-    }
-
-    // Many hosts jump the playhead back to 0 (or cycle start) on stop.
-    // Keep the last playing position / user scrub so the editor cursor stays put.
-    if (playing)
-    {
-        lastPlayingTimeSec.store(timeSec, std::memory_order_relaxed);
-    }
-    else if (audioWasPlaying)
-    {
-        const double park = lastPlayingTimeSec.load(std::memory_order_relaxed);
-        parkedPlayheadSec.store(park, std::memory_order_relaxed);
-        hasParkedPlayhead.store(true, std::memory_order_relaxed);
-        timeSec = park;
-    }
-    else if (hasParkedPlayhead.load(std::memory_order_relaxed))
-    {
-        timeSec = parkedPlayheadSec.load(std::memory_order_relaxed);
-    }
-
-    audioWasPlaying = playing;
-    hostPlaying.store(playing, std::memory_order_relaxed);
-    hostTimeSec.store(timeSec, std::memory_order_relaxed);
+    // DSP always uses the true host clock — never the parked GUI cursor.
+    const auto transport = getTransportSnapshot();
+    const double sr = juce::jmax(1.0, transport.sampleRate);
+    const double timeSec = static_cast<double>(transport.currentHostSample) / sr;
+    const bool playing = transport.isPlaying;
 
     if (apvts.getRawParameterValue(nf::params::power)->load() < 0.5f)
     {
@@ -182,7 +286,10 @@ void NFVocalHarmonizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
 void NFVocalHarmonizerAudioProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     auto s = readSettings(); s.enabled = false;
-    engine.process(buffer, s, hostTimeSec.load(std::memory_order_relaxed), &noteModel.getOffsetTable(),
+    const auto transport = getTransportSnapshot();
+    const double sr = juce::jmax(1.0, transport.sampleRate);
+    const double timeSec = static_cast<double>(transport.currentHostSample) / sr;
+    engine.process(buffer, s, timeSec, &noteModel.getOffsetTable(),
                    nullptr, false);
 }
 
@@ -192,15 +299,17 @@ juce::AudioProcessorEditor* NFVocalHarmonizerAudioProcessor::createEditor()
 void NFVocalHarmonizerAudioProcessor::getStateInformation(juce::MemoryBlock& dest)
 {
     auto root = apvts.copyState();
-    root.setProperty("schemaVersion", 3, nullptr);
+    root.setProperty("schemaVersion", 4, nullptr);
     root.addChild(slotA.createCopy(), -1, nullptr);
     root.addChild(slotB.createCopy(), -1, nullptr);
-    // Session-only note edits: stored with the instance, not with user presets.
     root.addChild(noteModel.toValueTree(), -1, nullptr);
-    // Completed visual may persist only together with a saved note map.
     if (analysisState.load(std::memory_order_relaxed) == AnalysisState::completed
         && ! noteModel.getNotes().empty())
         root.setProperty("analysisCompleted", true, nullptr);
+    root.setProperty("editorCursorSeconds", getEditorCursorSecondsForState(), nullptr);
+    root.setProperty("analysisStartHostSample",
+                     static_cast<juce::int64>(transportAnalysisStartSample.load(std::memory_order_relaxed)),
+                     nullptr);
     if (auto xml = root.createXml()) copyXmlToBinary(*xml, dest);
 }
 
@@ -220,13 +329,26 @@ void NFVocalHarmonizerAudioProcessor::setStateInformation(const void* data, int 
         noteModel.fromValueTree(edits);
         root.removeChild(edits, nullptr);
     }
-    // Restore completed indicator only when notes are present; never restore live arm/pulse.
     if (static_cast<bool>(root.getProperty("analysisCompleted", false))
         && ! noteModel.getNotes().empty())
         analysisState.store(AnalysisState::completed, std::memory_order_relaxed);
     else if (noteModel.getNotes().empty())
         analysisState.store(AnalysisState::idle, std::memory_order_relaxed);
     root.removeProperty("analysisCompleted", nullptr);
+
+    const double cursorSeconds = static_cast<double>(root.getProperty("editorCursorSeconds", 0.0));
+    editorCursorSecondsForState.store(cursorSeconds, std::memory_order_relaxed);
+    pendingEditorCursorSeconds.store(cursorSeconds, std::memory_order_release);
+    root.removeProperty("editorCursorSeconds", nullptr);
+
+    if (root.hasProperty("analysisStartHostSample"))
+    {
+        const auto start = static_cast<int64_t>(
+            static_cast<juce::int64>(root.getProperty("analysisStartHostSample")));
+        transportAnalysisStartSample.store(juce::jmax<int64_t>(0, start), std::memory_order_relaxed);
+        root.removeProperty("analysisStartHostSample", nullptr);
+    }
+
     apvts.replaceState(root);
 }
 

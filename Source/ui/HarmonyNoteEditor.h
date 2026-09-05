@@ -52,6 +52,10 @@ public:
     void zoomTimelineIn();
     void zoomTimelineOut();
 
+    void resetCursorForNewAnalysis() noexcept;
+    void restoreCursorFromState(double seconds) noexcept;
+    double getCursorSecondsForState() const noexcept;
+
     static constexpr float topToolbarHeight = 20.0f;
     static constexpr float laneHeaderHeight = 18.0f;
     static constexpr float laneContentHeight = 48.0f;
@@ -98,6 +102,8 @@ private:
     double timeAtMouseX(float mouseX) const;
     double getDisplayPlayheadSeconds() const;
     bool isNearPlayhead(float mouseX) const;
+    void updateCursorFromTransport();
+    int64_t getAnalysisLengthSamples() const noexcept;
     void nudgeSelectedPitch(int direction, bool fineCents);
     std::pair<int, nf::dsp::ScaleType> keyScale() const;
 
@@ -123,8 +129,11 @@ private:
     float panDragStartY = 0.0f;
     double panDragStartVisibleTime = 0.0;
     float panDragStartTopMidi = 84.0f;
-    double userPlayheadSec = 0.0;
-    bool hasUserPlayhead = false;
+
+    // Persistent cursor relative to analysisStartHostSample (never cleared on host stop).
+    int64_t editorCursorSample = 0;
+    int64_t lastDisplayedPlayingSample = 0;
+
     bool pendingEmptyGesture = false;
     juce::Point<float> emptyGestureOrigin;
     float emptyGestureStartX = 0.0f;
@@ -136,7 +145,7 @@ private:
     bool userNavigatedTimeline = false;
     bool userNavigatedPitch = false;
     bool followPlayhead = true;
-    bool editorWasPlaying = false;
+    bool wasPlaying = false;
     size_t lastFittedNoteCount = 0;
     double lastFittedContentStart = 0.0;
     double lastFittedContentEnd = 0.0;

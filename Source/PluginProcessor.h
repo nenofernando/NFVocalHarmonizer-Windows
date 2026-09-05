@@ -6,11 +6,24 @@
 #include "dsp/NoteEditModel.h"
 #include "dsp/NoteCapture.h"
 #include "dsp/AnalysisState.h"
+#include <atomic>
+#include <cstdint>
 
 class NFVocalHarmonizerAudioProcessor final : public juce::AudioProcessor,
                                               private juce::Timer
 {
 public:
+    struct TransportSnapshot final
+    {
+        int64_t currentHostSample = 0;
+        int64_t lastValidPlayingSample = 0;
+        int64_t analysisStartHostSample = 0;
+        double sampleRate = 44100.0;
+        bool isPlaying = false;
+        bool hasValidHostPosition = false;
+        uint64_t revision = 0;
+    };
+
     NFVocalHarmonizerAudioProcessor();
     ~NFVocalHarmonizerAudioProcessor() override;
     void prepareToPlay(double, int) override;
@@ -45,12 +58,20 @@ public:
     nf::dsp::PitchEstimate getPitchEstimate() const { return engine.getPitchEstimate(); }
     nf::dsp::ScaleResult getDetectedScale() const { return engine.getDetectedScale(); }
     nf::dsp::MeterSnapshot getMeters() const { return engine.getMeters(); }
-    double getHostTimeSeconds() const noexcept { return hostTimeSec.load(std::memory_order_relaxed); }
-    bool isHostPlaying() const noexcept { return hostPlaying.load(std::memory_order_relaxed); }
 
-    /** Park the editor/transport cursor while stopped (survives host returning to 0 on stop). */
-    void setParkedPlayheadSeconds(double timeSec) noexcept;
-    double getParkedPlayheadSeconds() const noexcept { return parkedPlayheadSec.load(std::memory_order_relaxed); }
+    TransportSnapshot getTransportSnapshot() const noexcept;
+    void markAnalysisStartFromCurrentTransport() noexcept;
+    void clearAnalysisTransportState() noexcept;
+
+    /** True host clock for DSP / ANALYZE arming (never substituted with parked GUI cursor). */
+    double getHostTimeSeconds() const noexcept;
+    bool isHostPlaying() const noexcept;
+
+    /** Session cursor seconds — written on message thread, read in getStateInformation. */
+    void setEditorCursorSecondsForState(double seconds) noexcept;
+    double getEditorCursorSecondsForState() const noexcept;
+    /** >= 0 means HarmonyNoteEditor should restore once after setStateInformation. */
+    double takePendingEditorCursorSeconds() noexcept;
 
     void captureSlot(bool slotA);
     void restoreSlot(bool slotA);
@@ -62,19 +83,26 @@ public:
 
 private:
     void timerCallback() override;
+    void captureHostTransportForEditor() noexcept;
     nf::dsp::HarmonySettings readSettings() const;
     std::pair<int, nf::dsp::ScaleType> activeKeyScale() const;
 
     nf::dsp::HarmonyEngine engine;
     nf::notes::NoteCapture capture;
     juce::ValueTree slotA { "SLOT_A" }, slotB { "SLOT_B" };
-    std::atomic<double> hostTimeSec { 0.0 };
-    std::atomic<double> parkedPlayheadSec { 0.0 };
-    std::atomic<double> lastPlayingTimeSec { 0.0 };
-    std::atomic<bool> hostPlaying { false };
-    std::atomic<bool> hasParkedPlayhead { false };
+
+    std::atomic<int64_t> transportCurrentSample { 0 };
+    std::atomic<int64_t> transportLastPlayingSample { 0 };
+    std::atomic<int64_t> transportAnalysisStartSample { 0 };
+    std::atomic<double> transportSampleRate { 44100.0 };
+    std::atomic<bool> transportIsPlaying { false };
+    std::atomic<bool> transportPositionValid { false };
+    std::atomic<uint64_t> transportRevision { 0 };
+
+    std::atomic<double> editorCursorSecondsForState { 0.0 };
+    std::atomic<double> pendingEditorCursorSeconds { -1.0 };
+
     std::atomic<AnalysisState> analysisState { AnalysisState::idle };
-    bool wasPlaying = false;          // message-thread (ANALYZE finalize)
-    bool audioWasPlaying = false;     // audio-thread (cursor park on stop)
+    bool wasPlaying = false; // message-thread (ANALYZE finalize)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NFVocalHarmonizerAudioProcessor)
 };

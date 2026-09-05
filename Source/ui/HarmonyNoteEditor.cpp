@@ -42,7 +42,7 @@ HarmonyNoteEditor::HarmonyNoteEditor(NFVocalHarmonizerAudioProcessor& p)
         processor.noteModel.setSnapMode(static_cast<nf::notes::SnapMode>(snapBox.getSelectedItemIndex()));
     };
     addAndMakeVisible(snapBox);
-    startTimerHz(30);
+    startTimerHz(60);
 }
 
 HarmonyNoteEditor::~HarmonyNoteEditor()
@@ -622,8 +622,17 @@ void HarmonyNoteEditor::paint(juce::Graphics& g)
                      + static_cast<float>((play - timelineView.viewStartSec) / dur) * notesArea.getWidth();
     if (px >= notesArea.getX() && px <= notesArea.getRight())
     {
-        g.setColour(juce::Colour(0xffedf1f4).withAlpha(hasUserPlayhead && ! processor.isHostPlaying() ? 1.0f : 0.8f));
+        const bool frozen = ! processor.isHostPlaying();
+        g.setColour(juce::Colour(0xffedf1f4).withAlpha(frozen ? 1.0f : 0.8f));
         g.drawLine(px, notesArea.getY(), px, notesArea.getBottom(), 1.6f);
+
+        // Persistent cursor marker (spec): small cyan triangle at the top.
+        g.setColour(juce::Colour::fromRGB(40, 224, 238));
+        juce::Path triangle;
+        triangle.addTriangle(px - 4.0f, notesArea.getY(),
+                             px + 4.0f, notesArea.getY(),
+                             px, notesArea.getY() + 6.0f);
+        g.fillPath(triangle);
     }
 
     if (tooltipText.isNotEmpty()
@@ -671,28 +680,102 @@ void HarmonyNoteEditor::timerCallback()
                                      [this](const juce::String& id) { return processor.noteModel.findNote(id) == nullptr; }),
                       selectedIds.end());
 
-    const bool playing = processor.isHostPlaying();
-    if (playing && ! editorWasPlaying)
-        followPlayhead = true; // re-enable page-follow on each transport start
+    const double pending = processor.takePendingEditorCursorSeconds();
+    if (pending >= 0.0)
+        restoreCursorFromState(pending);
 
-    // Park the scrub cursor where playback stopped (host often jumps to 0).
-    if (! playing && editorWasPlaying)
-    {
-        userPlayheadSec = processor.getParkedPlayheadSeconds();
-        hasUserPlayhead = true;
-    }
-    editorWasPlaying = playing;
+    updateCursorFromTransport();
+}
 
-    const double play = getDisplayPlayheadSeconds();
-    if (playing)
+int64_t HarmonyNoteEditor::getAnalysisLengthSamples() const noexcept
+{
+    const auto transport = processor.getTransportSnapshot();
+    const double sr = juce::jmax(1.0, transport.sampleRate);
+    const double endSec = juce::jmax(timelineView.contentEndSec, timelineView.contentStartSec + 0.25);
+    const int64_t endSample = static_cast<int64_t>(std::llround(endSec * sr));
+    const int64_t relativeEnd = endSample - transport.analysisStartHostSample;
+    return juce::jmax<int64_t>(1, relativeEnd);
+}
+
+void HarmonyNoteEditor::updateCursorFromTransport()
+{
+    const auto transport = processor.getTransportSnapshot();
+    const int64_t analysisLength = getAnalysisLengthSamples();
+
+    if (transport.isPlaying)
     {
-        // Follow host while playing; keep last scrub only for the stop transition above.
-        hasUserPlayhead = false;
+        if (transport.hasValidHostPosition)
+        {
+            const int64_t relative = transport.currentHostSample
+                                   - transport.analysisStartHostSample;
+            editorCursorSample = juce::jlimit<int64_t>(0, analysisLength, relative);
+            lastDisplayedPlayingSample = editorCursorSample;
+        }
+
+        if (! wasPlaying)
+            followPlayhead = true; // re-enable page-follow on each transport start
+
         if (followPlayhead)
-            followPlayheadPage(play);
+            followPlayheadPage(getDisplayPlayheadSeconds());
+    }
+    else if (wasPlaying)
+    {
+        // PLAYING → STOPPED: freeze last drawn point; ignore host return to zero.
+        editorCursorSample = juce::jlimit<int64_t>(0, analysisLength, lastDisplayedPlayingSample);
     }
 
+    wasPlaying = transport.isPlaying;
+    processor.setEditorCursorSecondsForState(getCursorSecondsForState());
     repaint();
+}
+
+void HarmonyNoteEditor::resetCursorForNewAnalysis() noexcept
+{
+    editorCursorSample = 0;
+    lastDisplayedPlayingSample = 0;
+    wasPlaying = false;
+    followPlayhead = true;
+    processor.setEditorCursorSecondsForState(0.0);
+    repaint();
+}
+
+void HarmonyNoteEditor::restoreCursorFromState(double seconds) noexcept
+{
+    const auto transport = processor.getTransportSnapshot();
+    const double sr = juce::jmax(1.0, transport.sampleRate);
+    const int64_t absolute = static_cast<int64_t>(std::llround(seconds * sr));
+    const int64_t relative = absolute - transport.analysisStartHostSample;
+    editorCursorSample = juce::jlimit<int64_t>(0, getAnalysisLengthSamples(), relative);
+    lastDisplayedPlayingSample = editorCursorSample;
+    processor.setEditorCursorSecondsForState(getCursorSecondsForState());
+    repaint();
+}
+
+double HarmonyNoteEditor::getCursorSecondsForState() const noexcept
+{
+    const auto transport = processor.getTransportSnapshot();
+    const double sr = juce::jmax(1.0, transport.sampleRate);
+    return static_cast<double>(transport.analysisStartHostSample + editorCursorSample) / sr;
+}
+
+void HarmonyNoteEditor::setPlayheadFromX(float mouseX)
+{
+    const double t = timeAtMouseX(mouseX);
+    const auto transport = processor.getTransportSnapshot();
+    const double sr = juce::jmax(1.0, transport.sampleRate);
+    const int64_t absolute = static_cast<int64_t>(std::llround(t * sr));
+    const int64_t relative = absolute - transport.analysisStartHostSample;
+    editorCursorSample = juce::jlimit<int64_t>(0, getAnalysisLengthSamples(), relative);
+    lastDisplayedPlayingSample = editorCursorSample;
+    processor.setEditorCursorSecondsForState(getCursorSecondsForState());
+    userNavigatedTimeline = true;
+    if (! processor.isHostPlaying())
+        followPlayheadPage(getDisplayPlayheadSeconds());
+}
+
+double HarmonyNoteEditor::getDisplayPlayheadSeconds() const
+{
+    return getCursorSecondsForState();
 }
 
 namespace
@@ -744,27 +827,6 @@ double HarmonyNoteEditor::timeAtMouseX(float mouseX) const
     const double width = juce::jmax(1.0, static_cast<double>(lane.getWidth()));
     const double frac = juce::jlimit(0.0, 1.0, static_cast<double>((mouseX - lane.getX()) / width));
     return timelineView.timeAtFraction(frac);
-}
-
-void HarmonyNoteEditor::setPlayheadFromX(float mouseX)
-{
-    const double t = timeAtMouseX(mouseX);
-    userPlayheadSec = juce::jlimit(timelineView.contentStartSec, timelineView.contentEndSec, t);
-    hasUserPlayhead = true;
-    userNavigatedTimeline = true;
-    processor.setParkedPlayheadSeconds(userPlayheadSec);
-    // Keep the clicked page in view when scrubbing while stopped.
-    if (! processor.isHostPlaying())
-        followPlayheadPage(userPlayheadSec);
-}
-
-double HarmonyNoteEditor::getDisplayPlayheadSeconds() const
-{
-    if (processor.isHostPlaying())
-        return processor.getHostTimeSeconds();
-    if (hasUserPlayhead)
-        return userPlayheadSec;
-    return processor.getHostTimeSeconds(); // parked time while stopped
 }
 
 bool HarmonyNoteEditor::isNearPlayhead(float mouseX) const
@@ -1188,6 +1250,12 @@ void HarmonyNoteEditor::nudgeSelectedPitch(int direction, bool fineCents)
 
 bool HarmonyNoteEditor::keyPressed(const juce::KeyPress& key)
 {
+    if (key.getKeyCode() == juce::KeyPress::spaceKey)
+    {
+        // Do not consume Space — the DAW owns Play/Stop; timer freezes the cursor.
+        return false;
+    }
+
     if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
     {
         // Consume even with empty selection so Delete never reaches the DAW.

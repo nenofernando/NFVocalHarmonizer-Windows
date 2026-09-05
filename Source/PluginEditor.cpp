@@ -156,9 +156,17 @@ NFVocalHarmonizerAudioProcessorEditor::NFVocalHarmonizerAudioProcessorEditor(NFV
         if (safe == nullptr)
             return;
         if (safe->audioProcessor.isAnalyzeArmed())
+        {
+            // Finalize capture without zeroing the cursor.
             safe->audioProcessor.finalizeAnalyzeCapture();
+        }
         else
+        {
+            // New analysis may reset the editor cursor; do not finalize-path reset.
+            safe->audioProcessor.markAnalysisStartFromCurrentTransport();
+            safe->noteEditor.resetCursorForNewAnalysis();
             safe->audioProcessor.beginAnalyzeCapture();
+        }
         safe->refreshAnalyzeButtonVisual();
     };
     aButton.onClick = [safe = juce::Component::SafePointer<NFVocalHarmonizerAudioProcessorEditor>(this)] { if (safe != nullptr) safe->switchAB(true); };
