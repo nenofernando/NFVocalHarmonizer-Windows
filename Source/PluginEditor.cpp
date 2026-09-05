@@ -285,7 +285,8 @@ void NFVocalHarmonizerAudioProcessorEditor::layoutFixedCanvas()
     constexpr int powerHeight = 36;
     constexpr int controlsCentreY = 31 + 6; // header origin at y=6
 
-    auto place = [&controls](juce::Component& component, int w, int h = normalHeight)
+    // Default height must be a literal for MSVC (no local as default param).
+    auto place = [&controls](juce::Component& component, int w, int h = 30)
     {
         auto slot = controls.removeFromLeft(w);
         component.setBounds(slot.getX(), controlsCentreY - h / 2, w, h);
